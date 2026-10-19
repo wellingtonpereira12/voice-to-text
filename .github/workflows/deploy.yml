@@ -1,0 +1,73 @@
+name: Build and Deploy Voice-to-Text to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build_and_test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build application
+        run: npm run build
+
+  deploy:
+    name: Deploy to VPS Docker
+    runs-on: ubuntu-latest
+    needs: build_and_test
+    steps:
+      - name: Execute deployment on VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT }}
+          script_stop: true
+          script: |
+            echo "🚀 Iniciando Deploy do VoxScript (Voice-to-Text) na VPS..."
+            
+            # Se o repositório ainda não estiver clonado na VPS, clona
+            if [ ! -d "/root/voice-to-text" ]; then
+              echo "📥 Clonando repositório na VPS..."
+              git clone https://github.com/wellingtonpereira12/voice-to-text.git /root/voice-to-text
+            fi
+
+            cd /root/voice-to-text
+
+            echo "📥 Atualizando código a partir da branch main..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "🐳 Reconstruindo e iniciando container Docker na porta 3080..."
+            docker compose up -d --build
+
+            echo "⏳ Aguardando inicialização do serviço..."
+            sleep 5
+
+            echo "🔍 Verificando status do container voice-to-text..."
+            docker ps --filter name=voice-to-text
+
+            echo "🧪 Testando endpoint de saúde da aplicação..."
+            curl -fsS http://127.0.0.1:3080/api/health > /dev/null || {
+              echo "❌ Erro ao validar endpoint da aplicação. Exibindo logs:"
+              docker logs voice-to-text --tail 30
+              exit 1
+            }
+
+            echo "✅ Deploy realizado com sucesso no Docker da VPS (porta 3080)!"
