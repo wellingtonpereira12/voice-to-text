@@ -4,12 +4,9 @@ import {
   Mic, 
   Volume2, 
   Globe, 
-  History, 
-  Settings, 
   Check, 
   RefreshCw, 
   Trash2, 
-  Clock, 
   Copy,
   Sliders
 } from 'lucide-react';
@@ -41,12 +38,12 @@ export default function SettingsModal({
   const animFrameRef = useRef(null);
 
   const languages = [
-    { code: 'pt-BR', label: 'Português (Brasil)', flag: '🇧🇷' },
-    { code: 'en-US', label: 'English (US)', flag: '🇺🇸' },
-    { code: 'es-ES', label: 'Español', flag: '🇪🇸' },
-    { code: 'fr-FR', label: 'Français', flag: '🇫🇷' },
-    { code: 'de-DE', label: 'Deutsch', flag: '🇩🇪' },
-    { code: 'it-IT', label: 'Italiano', flag: '🇮🇹' },
+    { code: 'pt-BR', label: 'Português (Brasil)' },
+    { code: 'en-US', label: 'English (US)' },
+    { code: 'es-ES', label: 'Español' },
+    { code: 'fr-FR', label: 'Français' },
+    { code: 'de-DE', label: 'Deutsch' },
+    { code: 'it-IT', label: 'Italiano' },
   ];
 
   const loadAudioDevices = async (requestPermission = false) => {
@@ -156,94 +153,86 @@ export default function SettingsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop com desfoque */}
+      {/* Backdrop suave */}
       <div 
-        className="fixed inset-0 bg-black/60 backdrop-blur-md transition-opacity"
+        className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
         onClick={onClose}
       />
 
-      {/* Conteúdo do Modal */}
-      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 z-10 animate-in fade-in zoom-in-95 duration-200">
+      {/* Janela de Configurações */}
+      <div className="relative w-full max-w-md bg-white border border-slate-200 rounded-xl shadow-lg p-6 z-10 text-slate-800">
         {/* Cabeçalho */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-violet-600/20 border border-violet-500/30 flex items-center justify-center text-violet-400">
-              <Sliders className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-base text-slate-100">Configurações</h3>
-              <p className="text-xs text-slate-400">Ajuste o microfone e preferências</p>
-            </div>
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="font-semibold text-base text-slate-900">Configurações</h3>
+            <p className="text-xs text-slate-500">Ajuste suas preferências de áudio</p>
           </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Abas */}
-        <div className="flex gap-2 my-4 p-1 bg-slate-950/80 rounded-xl border border-slate-800">
+        <div className="flex border-b border-slate-200 mt-4 mb-5">
           <button
             type="button"
             onClick={() => setActiveTab('audio')}
-            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`pb-2.5 px-3 text-xs font-medium border-b-2 transition-colors ${
               activeTab === 'audio'
-                ? 'bg-violet-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'border-slate-900 text-slate-900 font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
-            Microfone & Fala
+            Microfone & Idioma
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('history')}
-            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+            className={`pb-2.5 px-3 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
               activeTab === 'history'
-                ? 'bg-violet-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'border-slate-900 text-slate-900 font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
             <span>Histórico</span>
             {history.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] font-mono">
-                {history.length}
-              </span>
+              <span className="text-[11px] text-slate-400">({history.length})</span>
             )}
           </button>
         </div>
 
-        {/* Conteúdo da Aba Áudio */}
+        {/* Conteúdo Aba Microfone */}
         {activeTab === 'audio' && (
-          <div className="space-y-4">
+          <div className="space-y-4 text-sm">
             {/* Escolha do Microfone */}
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                  <Mic className="w-3.5 h-3.5 text-violet-400" />
-                  Qual microfone usar?
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-slate-700">
+                  Microfone de entrada
                 </label>
                 <button
                   type="button"
                   onClick={() => loadAudioDevices(true)}
-                  className="text-[11px] text-slate-400 hover:text-violet-400 flex items-center gap-1 transition-colors"
+                  className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
                 >
                   <RefreshCw className="w-3 h-3" />
                   <span>Atualizar</span>
                 </button>
               </div>
 
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+              <div className="space-y-1 max-h-36 overflow-y-auto border border-slate-200 rounded-lg p-1 bg-slate-50">
                 {devices.length === 0 ? (
                   <button
                     type="button"
                     onClick={() => loadAudioDevices(true)}
-                    className="w-full p-3 rounded-xl bg-slate-800/60 border border-slate-700/80 text-xs text-violet-300 hover:bg-slate-800 transition-colors text-center font-medium"
+                    className="w-full py-2.5 text-xs text-blue-600 hover:underline text-center"
                   >
-                    Permitir acesso ao microfone
+                    Clique aqui para autorizar o microfone
                   </button>
                 ) : (
                   devices.map((device, idx) => {
@@ -256,14 +245,14 @@ export default function SettingsModal({
                           onSelectDevice(device.deviceId);
                           if (isTesting) stopMicrophoneTest();
                         }}
-                        className={`w-full p-2.5 rounded-xl text-xs flex items-center justify-between text-left transition-all ${
+                        className={`w-full px-3 py-2 text-xs rounded-md flex items-center justify-between text-left transition-colors ${
                           isSelected
-                            ? 'bg-violet-600/20 border border-violet-500 text-white font-medium'
-                            : 'bg-slate-950/60 hover:bg-slate-800 border border-slate-800 text-slate-300'
+                            ? 'bg-white border border-slate-300 font-medium text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:bg-slate-100'
                         }`}
                       >
-                        <span className="truncate mr-2">{device.label || `Microfone ${idx + 1}`}</span>
-                        {isSelected && <Check className="w-4 h-4 text-violet-400 shrink-0" />}
+                        <span className="truncate">{device.label || `Microfone ${idx + 1}`}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-slate-800 shrink-0 ml-2" />}
                       </button>
                     );
                   })
@@ -271,106 +260,90 @@ export default function SettingsModal({
               </div>
             </div>
 
-            {/* Testador de Volume */}
-            <div className="p-3 bg-slate-950/60 rounded-2xl border border-slate-800">
+            {/* Teste de Volume */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-slate-400 flex items-center gap-1.5">
-                  <Volume2 className="w-3.5 h-3.5 text-slate-400" />
-                  Teste de volume do microfone
-                </span>
+                <span className="text-xs text-slate-600">Teste do microfone</span>
                 <button
                   type="button"
                   onClick={toggleMicrophoneTest}
-                  className={`text-[11px] px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                    isTesting
-                      ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
+                  className="text-xs px-2.5 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 font-medium"
                 >
-                  {isTesting ? 'Parar Teste' : 'Testar Mic'}
+                  {isTesting ? 'Parar' : 'Testar'}
                 </button>
               </div>
-
-              <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-emerald-500 via-sky-500 to-violet-500 transition-all duration-75"
+                  className="h-full bg-slate-700 transition-all duration-75"
                   style={{ width: `${audioLevel}%` }}
                 />
               </div>
-              <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-                <span>0%</span>
-                <span>Fale para testar: {audioLevel}%</span>
-                <span>100%</span>
-              </div>
             </div>
 
-            {/* Idioma da Fala */}
-            <div className="pt-2 border-t border-slate-800">
-              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5 mb-2">
-                <Globe className="w-3.5 h-3.5 text-violet-400" />
-                Idioma do reconhecimento de voz
+            {/* Idioma */}
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                Idioma do áudio
               </label>
               <select
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
-                className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 outline-none focus:border-violet-500 cursor-pointer"
+                className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-slate-400"
               >
                 {languages.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.flag} {l.label}
-                  </option>
+                  <option key={l.code} value={l.code}>{l.label}</option>
                 ))}
               </select>
             </div>
 
-            {/* Modo de adição & sons */}
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer">
+            {/* Opções */}
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <label className="flex items-center justify-between text-xs text-slate-700 cursor-pointer">
                 <span>Acumular texto ao falar novamente</span>
                 <input
                   type="checkbox"
                   checked={appendMode}
                   onChange={(e) => setAppendMode(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-violet-600 focus:ring-violet-500"
+                  className="rounded border-slate-300 text-slate-900 focus:ring-0"
                 />
               </label>
 
-              <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer">
-                <span>Efeitos sonoros (bips de início/fim)</span>
+              <label className="flex items-center justify-between text-xs text-slate-700 cursor-pointer">
+                <span>Efeitos sonoros (bips suaves)</span>
                 <input
                   type="checkbox"
                   checked={soundEffectsEnabled}
                   onChange={(e) => setSoundEffectsEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-violet-600 focus:ring-violet-500"
+                  className="rounded border-slate-300 text-slate-900 focus:ring-0"
                 />
               </label>
             </div>
           </div>
         )}
 
-        {/* Conteúdo da Aba Histórico */}
+        {/* Conteúdo Aba Histórico */}
         {activeTab === 'history' && (
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs text-slate-400">Transcrições salvas nesta sessão</span>
+            <div className="flex items-center justify-between mb-3 text-xs text-slate-500">
+              <span>Transcrições desta sessão</span>
               {history.length > 0 && (
                 <button
                   type="button"
                   onClick={() => {
-                    if (window.confirm('Deseja limpar todo o histórico?')) onClearHistory();
+                    if (window.confirm('Limpar histórico da sessão?')) onClearHistory();
                   }}
-                  className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors"
+                  className="text-red-600 hover:underline flex items-center gap-1"
                 >
                   <Trash2 className="w-3 h-3" />
-                  <span>Limpar tudo</span>
+                  <span>Limpar</span>
                 </button>
               )}
             </div>
 
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
               {history.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-500">
-                  Nenhuma transcrição gravada ainda nesta sessão.
+                <div className="py-10 text-center text-xs text-slate-400">
+                  Nenhuma gravação anterior nesta sessão.
                 </div>
               ) : (
                 history.map((item, idx) => (
@@ -380,15 +353,13 @@ export default function SettingsModal({
                       onSelectHistoryItem(item.text);
                       onClose();
                     }}
-                    className="p-3 rounded-xl bg-slate-950/70 hover:bg-slate-950 border border-slate-800/80 hover:border-violet-500/50 cursor-pointer transition-all flex items-start justify-between gap-3 group"
+                    className="p-2.5 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 cursor-pointer flex items-start justify-between gap-2"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mb-1">
-                        <Clock className="w-3 h-3" />
-                        <span>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        {item.duration > 0 && <span>• {item.duration}s</span>}
-                      </div>
-                      <p className="text-xs text-slate-200 line-clamp-2 leading-relaxed">
+                      <span className="text-[10px] text-slate-400 block mb-0.5">
+                        {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <p className="text-xs text-slate-700 line-clamp-2">
                         {item.text}
                       </p>
                     </div>
@@ -396,11 +367,10 @@ export default function SettingsModal({
                     <button
                       type="button"
                       onClick={(e) => handleCopyHistory(e, item.text, item.id || idx)}
-                      title="Copiar texto"
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-violet-600 text-slate-300 hover:text-white shrink-0 transition-colors"
+                      className="p-1 text-slate-400 hover:text-slate-700 rounded"
                     >
                       {copiedHistoryId === (item.id || idx) ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
                       ) : (
                         <Copy className="w-3.5 h-3.5" />
                       )}
@@ -412,14 +382,14 @@ export default function SettingsModal({
           </div>
         )}
 
-        {/* Rodapé do Modal */}
-        <div className="mt-5 pt-3 border-t border-slate-800 flex justify-end">
+        {/* Fechar */}
+        <div className="mt-5 pt-3 border-t border-slate-100 flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shadow-lg shadow-violet-600/30 transition-all active:scale-95"
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium rounded-lg transition-colors"
           >
-            Pronto
+            Concluir
           </button>
         </div>
       </div>
