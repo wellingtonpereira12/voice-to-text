@@ -285,7 +285,7 @@ export default function App() {
       {/* CABEÇALHO LIMPO (SEM ÍCONES EM QUADRADOS ARREDONDADOS) */}
       <header className="w-full max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="text-base font-semibold tracking-tight text-slate-900">
-          VoxScript
+          Voz
         </div>
 
         <button
@@ -451,7 +451,7 @@ export default function App() {
 
       {/* RODAPÉ DISCRETO */}
       <footer className="w-full max-w-3xl mx-auto px-6 py-4 flex items-center justify-between text-[11px] text-slate-400">
-        <span>VoxScript</span>
+        <span>Voz</span>
         <span>Áudio processado no seu navegador</span>
       </footer>
 

@@ -36,5 +36,5 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor VoxScript rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor Voz rodando na porta ${PORT}`);
 });
