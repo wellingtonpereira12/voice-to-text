@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, Download, Volume2, RotateCcw, Music } from 'lucide-react';
+import { Play, Pause, Download, RotateCcw, Volume2 } from 'lucide-react';
 
-export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
+export default function AudioPlayer({ audioUrl, recordedDuration }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -36,7 +36,6 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
 
   const handleLoadedMetadata = () => {
     if (audioRef.current) {
-      // Alguns navegadores relatam Infinity para blobs webm gravados; usamos recordedDuration como fallback
       const audioDur = audioRef.current.duration;
       if (isFinite(audioDur) && audioDur > 0) {
         setDuration(audioDur);
@@ -57,7 +56,7 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
   const formatSeconds = (sec) => {
     if (isNaN(sec) || !isFinite(sec)) return '00:00';
     const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
+    const s = sec % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
@@ -65,14 +64,14 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
     if (!audioUrl) return;
     const a = document.createElement('a');
     a.href = audioUrl;
-    a.download = `gravacao-voz-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+    a.download = `audio-gravado-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
   };
 
   return (
-    <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-md flex flex-col sm:flex-row items-center gap-3">
+    <div className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-col sm:flex-row items-center gap-3 text-slate-700">
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -85,18 +84,18 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
       <button
         type="button"
         onClick={togglePlay}
-        className="w-10 h-10 rounded-xl bg-violet-600 hover:bg-violet-500 text-white flex items-center justify-center shrink-0 shadow-lg shadow-violet-600/20 active:scale-95 transition-all"
-        title={isPlaying ? 'Pausar áudio' : 'Reproduzir gravação de voz'}
+        className="w-9 h-9 rounded-md bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center shrink-0 transition-colors"
+        title={isPlaying ? 'Pausar áudio' : 'Ouvir sua voz gravada'}
       >
-        {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+        {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
       </button>
 
       {/* Informações e Barra de Progresso */}
       <div className="flex-1 w-full space-y-1">
-        <div className="flex items-center justify-between text-xs text-slate-400">
-          <span className="flex items-center gap-1 font-medium text-slate-300">
-            <Music className="w-3.5 h-3.5 text-violet-400" />
-            Gravação Recente
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span className="flex items-center gap-1 font-medium text-slate-700">
+            <Volume2 className="w-3.5 h-3.5 text-slate-500" />
+            Sua voz gravada
           </span>
           <span className="font-mono text-[11px]">
             {formatSeconds(currentTime)} / {formatSeconds(duration || recordedDuration || 0)}
@@ -110,12 +109,12 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
           step="0.05"
           value={currentTime}
           onChange={handleSeek}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
+          className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-slate-800"
         />
       </div>
 
-      {/* Botões de Ação do Áudio */}
-      <div className="flex items-center gap-2 self-end sm:self-center">
+      {/* Botões de Ação */}
+      <div className="flex items-center gap-1.5 self-end sm:self-center">
         <button
           type="button"
           onClick={() => {
@@ -125,19 +124,19 @@ export default function AudioPlayer({ audioBlob, audioUrl, recordedDuration }) {
             }
           }}
           title="Reiniciar áudio"
-          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+          className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600 transition-colors"
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className="w-3.5 h-3.5" />
         </button>
 
         <button
           type="button"
           onClick={downloadAudio}
           title="Baixar arquivo de áudio (.webm)"
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors"
         >
-          <Download className="w-3.5 h-3.5 text-violet-400" />
-          <span>Baixar Áudio</span>
+          <Download className="w-3.5 h-3.5" />
+          <span>Baixar áudio</span>
         </button>
       </div>
     </div>

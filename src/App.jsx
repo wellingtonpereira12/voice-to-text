@@ -9,15 +9,19 @@ import {
   VolumeX, 
   Download, 
   Trash2, 
-  RotateCcw
+  RotateCcw,
+  Sparkles,
+  FileText
 } from 'lucide-react';
 import SettingsModal from './components/SettingsModal';
+import AudioPlayer from './components/AudioPlayer';
 import { playChime } from './utils/audioUtils';
+import { formatAndPolishSpeech } from './utils/textFormatter';
 
 export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
-    return localStorage.getItem('voxscript_mic_device_id') || '';
+    return localStorage.getItem('voz_mic_device_id') || '';
   });
   const [language, setLanguage] = useState('pt-BR');
   const [appendMode, setAppendMode] = useState(false);
@@ -26,11 +30,15 @@ export default function App() {
   // Estados de Gravação
   const [isRecording, setIsRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [liveAudioLevel, setLiveAudioLevel] = useState(0);
 
-  // Transcrição
-  const [mediaStream, setMediaStream] = useState(null);
-  const [text, setText] = useState('');
-  const [interimText, setInterimText] = useState('');
+  // Áudio Gravado
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [recordedDuration, setRecordedDuration] = useState(0);
+
+  // Transcrição em Tempo Real e Final
+  const [liveTranscription, setLiveTranscription] = useState('');
+  const [finalText, setFinalText] = useState('');
   const [copied, setCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -38,35 +46,47 @@ export default function App() {
   // Histórico na Sessão
   const [history, setHistory] = useState(() => {
     try {
-      const saved = localStorage.getItem('voxscript_session_history');
+      const saved = localStorage.getItem('voz_session_history');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
 
+  // Referências
+  const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const isRecordingRef = useRef(false);
   const timerIntervalRef = useRef(null);
+
+  // Refs de transcrição para evitar closures desatualizadas
   const accumulatedTranscriptRef = useRef('');
+  const interimTranscriptRef = useRef('');
+
+  // Analisador de volume para o microfone
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const animFrameRef = useRef(null);
 
   const showToast = (msg) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(''), 2500);
+    setTimeout(() => setToastMessage(''), 3000);
   };
 
   const handleSelectDevice = (deviceId) => {
     setSelectedDeviceId(deviceId);
-    localStorage.setItem('voxscript_mic_device_id', deviceId);
+    localStorage.setItem('voz_mic_device_id', deviceId);
   };
 
   useEffect(() => {
     try {
-      localStorage.setItem('voxscript_session_history', JSON.stringify(history));
+      localStorage.setItem('voz_session_history', JSON.stringify(history));
     } catch (e) {}
   }, [history]);
 
+  // Timer de gravação
   useEffect(() => {
     if (isRecording) {
       timerIntervalRef.current = setInterval(() => {
@@ -89,56 +109,134 @@ export default function App() {
   // INICIAR GRAVAÇÃO
   const startRecording = async () => {
     try {
+      // Limpeza de estados anteriores
       accumulatedTranscriptRef.current = '';
-      setInterimText('');
+      interimTranscriptRef.current = '';
+      audioChunksRef.current = [];
+      setLiveTranscription('');
       setElapsedSeconds(0);
       setCopied(false);
 
-      const audioConstraints = selectedDeviceId
-        ? { deviceId: { exact: selectedDeviceId }, echoCancellation: true, noiseSuppression: true }
-        : { echoCancellation: true, noiseSuppression: true };
+      // 1. Obter áudio do microfone selecionado (usando ideal para evitar OverconstrainedError no Chrome/Windows)
+      const audioConstraints = selectedDeviceId && selectedDeviceId !== 'default'
+        ? { deviceId: { ideal: selectedDeviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-      setMediaStream(stream);
+      mediaStreamRef.current = stream;
 
-      const recorder = new MediaRecorder(stream);
+      // 2. Configurar Analisador de Volume em Tempo Real
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = audioCtx;
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 128;
+        analyserRef.current = analyser;
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const checkLevel = () => {
+          if (!isRecordingRef.current || !analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avg = sum / dataArray.length;
+          setLiveAudioLevel(Math.min(100, Math.round((avg / 128) * 100)));
+          animFrameRef.current = requestAnimationFrame(checkLevel);
+        };
+        checkLevel();
+      } catch (err) {
+        console.warn('Erro ao inicializar analisador de áudio:', err);
+      }
+
+      // 3. Configurar MediaRecorder para salvar a gravação da voz
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = MediaRecorder.isTypeSupported('audio/webm') 
+          ? 'audio/webm' 
+          : MediaRecorder.isTypeSupported('audio/mp4') 
+          ? 'audio/mp4' 
+          : '';
+      }
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
-      recorder.start(500);
 
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        if (audioChunksRef.current.length > 0) {
+          const type = recorder.mimeType || 'audio/webm';
+          const blob = new Blob(audioChunksRef.current, { type });
+          const url = URL.createObjectURL(blob);
+          setAudioUrl(url);
+        }
+      };
+
+      recorder.start(250);
+
+      // 4. Configurar Reconhecimento de Voz (SpeechRecognition)
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = language;
+        recognition.lang = language || 'pt-BR';
+        recognition.maxAlternatives = 1;
 
         recognition.onresult = (event) => {
           let currentInterim = '';
           for (let i = event.resultIndex; i < event.results.length; i++) {
             const transcript = event.results[i][0].transcript;
             if (event.results[i].isFinal) {
-              accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? ' ' : '') + transcript.trim();
+              const cleanFinal = transcript.trim();
+              if (cleanFinal) {
+                accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? ' ' : '') + cleanFinal;
+              }
             } else {
               currentInterim += transcript;
             }
           }
-          setInterimText(currentInterim);
+
+          interimTranscriptRef.current = currentInterim;
+
+          // Atualiza o texto na tela EM TEMPO REAL enquanto o usuário fala!
+          const fullCurrentLive = (
+            accumulatedTranscriptRef.current + (currentInterim ? ' ' + currentInterim : '')
+          ).trim();
+
+          setLiveTranscription(fullCurrentLive);
         };
 
         recognition.onerror = (event) => {
-          console.warn('Reconhecimento de fala:', event.error);
+          console.warn('SpeechRecognition event error:', event.error);
+          if (event.error === 'not-allowed') {
+            showToast('Acesso ao microfone foi bloqueado pelo navegador.');
+          }
         };
 
         recognition.onend = () => {
+          // Se ainda deve estar gravando, reinicia automaticamente para não cortar a fala
           if (isRecordingRef.current) {
-            try { recognition.start(); } catch (e) {}
+            try {
+              recognition.start();
+            } catch (e) {}
           }
         };
 
         recognitionRef.current = recognition;
-        try { recognition.start(); } catch (e) {}
+        try {
+          recognition.start();
+        } catch (e) {
+          console.error('Erro ao iniciar reconhecimento:', e);
+        }
       } else {
-        alert('Seu navegador não possui suporte ao reconhecimento nativo. Recomendamos Google Chrome ou Edge.');
+        alert('Seu navegador não possui suporte ao reconhecimento de voz nativo. Recomendamos usar o Google Chrome ou Microsoft Edge.');
       }
 
       isRecordingRef.current = true;
@@ -147,53 +245,75 @@ export default function App() {
       if (soundEffectsEnabled) playChime('start');
     } catch (err) {
       console.error('Erro ao acessar microfone:', err);
-      alert('Não foi possível acessar o microfone. Verifique as permissões.');
+      alert('Não foi possível acessar o microfone. Verifique as permissões do seu navegador.');
       stopRecordingCleanup();
     }
   };
 
-  // PARAR GRAVAÇÃO E MOSTRAR O TEXTO
+  // PARAR GRAVAÇÃO E FORMATAR O TEXTO (ESTILO ANTIGRAVITY)
   const stopRecording = () => {
     isRecordingRef.current = false;
     setIsRecording(false);
     const duration = elapsedSeconds;
+    setRecordedDuration(duration);
 
+    // 1. Limpar loop de análise de volume
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setLiveAudioLevel(0);
+
+    // 2. Parar gravador de áudio para salvar a gravação da voz
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch (e) {}
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {
+        console.error('Erro ao parar gravação:', e);
+      }
     }
 
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((track) => track.stop());
-      setMediaStream(null);
+    // 3. Parar tracks do stream
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
     }
 
+    // 4. Parar reconhecimento de voz
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {}
     }
 
-    const sessionTranscription = (
-      accumulatedTranscriptRef.current + (interimText ? ' ' + interimText : '')
+    // 5. Capturar todo o texto falado (acumulado final + resíduo interino)
+    const rawSpokenText = (
+      accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
     ).trim();
 
-    setInterimText('');
+    // 6. DAR AQUELA ARRUMADA NO TEXTO BACANA (pontuação falada, maiúsculas, espaçamento)
+    if (rawSpokenText) {
+      const polishedText = formatAndPolishSpeech(rawSpokenText);
 
-    if (sessionTranscription) {
-      setText((prev) => {
-        if (!prev || !appendMode) return sessionTranscription;
-        return prev + '\n\n' + sessionTranscription;
+      setFinalText((prev) => {
+        if (!prev || !appendMode) return polishedText;
+        return prev + '\n\n' + polishedText;
       });
 
+      // Salva no histórico da sessão
       setHistory((prev) => [
         {
           id: Date.now().toString(),
-          text: sessionTranscription,
+          text: polishedText,
           duration,
           timestamp: new Date().toISOString()
         },
         ...prev.slice(0, 19)
       ]);
     } else {
-      showToast('Nenhuma fala foi capturada. Tente novamente.');
+      // Se por algum motivo o Chrome não pegou o texto das palavras, avisa mas mantém o player de áudio disponível!
+      showToast('O áudio foi gravado com sucesso! Nenhuma palavra foi identificada na fala.');
     }
 
     if (soundEffectsEnabled) playChime('stop');
@@ -202,28 +322,32 @@ export default function App() {
   const stopRecordingCleanup = () => {
     isRecordingRef.current = false;
     setIsRecording(false);
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((t) => t.stop());
-      setMediaStream(null);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
     }
   };
 
   // COPIAR TEXTO
   const handleCopy = async () => {
-    if (!text.trim()) return;
+    if (!finalText.trim()) return;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(finalText);
       } else {
         const ta = document.createElement('textarea');
-        ta.value = text;
+        ta.value = finalText;
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
       }
       setCopied(true);
-      showToast('Texto copiado!');
+      showToast('Texto copiado para a área de transferência!');
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       showToast('Falha ao copiar.');
@@ -238,34 +362,45 @@ export default function App() {
       setIsSpeaking(false);
       return;
     }
-    if (!text.trim()) return;
+    if (!finalText.trim()) return;
 
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = language;
+    const u = new SpeechSynthesisUtterance(finalText);
+    u.lang = language || 'pt-BR';
     u.onstart = () => setIsSpeaking(true);
     u.onend = () => setIsSpeaking(false);
     u.onerror = () => setIsSpeaking(false);
     window.speechSynthesis.speak(u);
   };
 
-  // BAIXAR ARQUIVO
+  // BAIXAR .TXT
   const handleDownloadTxt = () => {
-    if (!text.trim()) return;
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    if (!finalText.trim()) return;
+    const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transcricao-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.download = `transcricao-voz-${new Date().toISOString().slice(0, 10)}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('Arquivo baixado!');
+    showToast('Arquivo de texto baixado!');
   };
 
+  // REORGANIZAR / FORMATAR TEXTO MANUALMENTE
+  const handlePolishAgain = () => {
+    if (!finalText.trim()) return;
+    const polished = formatAndPolishSpeech(finalText);
+    setFinalText(polished);
+    showToast('Texto reformatado com sucesso!');
+  };
+
+  // LIMPAR
   const handleReset = () => {
-    setText('');
-    setInterimText('');
+    setFinalText('');
+    setLiveTranscription('');
+    setAudioUrl(null);
+    setRecordedDuration(0);
     setCopied(false);
     if (isSpeaking && window.speechSynthesis) {
       window.speechSynthesis.cancel();
@@ -275,14 +410,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f8f9fa] text-slate-800 flex flex-col justify-between font-sans">
-      {/* Toast discreto */}
+      {/* Toast flutuante */}
       {toastMessage && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-medium shadow-md transition-all">
           {toastMessage}
         </div>
       )}
 
-      {/* CABEÇALHO LIMPO (SEM ÍCONES EM QUADRADOS ARREDONDADOS) */}
+      {/* CABEÇALHO */}
       <header className="w-full max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="text-base font-semibold tracking-tight text-slate-900">
           Voz
@@ -299,23 +434,23 @@ export default function App() {
         </button>
       </header>
 
-      {/* ÁREA PRINCIPAL */}
-      <main className="flex-1 w-full max-w-xl mx-auto px-6 flex flex-col items-center justify-center -mt-8">
-        {/* ESTADO 1: INICIAL LIMPO */}
-        {!isRecording && !text && (
+      {/* ÁREA CENTRAL */}
+      <main className="flex-1 w-full max-w-xl mx-auto px-6 flex flex-col items-center justify-center -mt-6">
+        {/* ESTADO 1: INICIAL LIMPO (ANTES DE GRAVAR) */}
+        {!isRecording && !finalText && !audioUrl && (
           <div className="flex flex-col items-center text-center">
             <h1 className="text-xl sm:text-2xl font-semibold text-slate-900 mb-1">
               Toque no microfone para falar
             </h1>
-            <p className="text-xs text-slate-500 mb-8">
-              O que você falar será transformado em texto pronto para copiar.
+            <p className="text-xs text-slate-500 mb-8 max-w-sm">
+              Conforme você fala, o texto vai aparecendo na tela em tempo real. Ao parar, ele fica pronto para copiar.
             </p>
 
-            {/* BOTÃO DE MICROFONE NATURAL E DISCRETO */}
+            {/* BOTÃO DO MICROFONE */}
             <button
               type="button"
               onClick={startRecording}
-              className="w-20 h-20 rounded-full bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center shadow-sm active:scale-95 transition-all"
+              className="w-20 h-20 rounded-full bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center shadow-xs active:scale-95 transition-all"
               title="Clique para falar"
             >
               <Mic className="w-8 h-8" />
@@ -323,61 +458,84 @@ export default function App() {
           </div>
         )}
 
-        {/* ESTADO 2: OUVINDO (FEEDBACK LIMPO) */}
+        {/* ESTADO 2: GRAVANDO (ESCREVE EM TEMPO REAL EMBAIXO DO MICROFONE!) */}
         {isRecording && (
-          <div className="flex flex-col items-center text-center">
-            <div className="flex items-center gap-2 mb-6">
-              <span className="w-2 h-2 rounded-full bg-red-600"></span>
-              <span className="text-xs font-medium text-red-600 uppercase tracking-wider">
-                Ouvindo...
+          <div className="w-full flex flex-col items-center text-center">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+              <span className="text-xs font-semibold text-red-600 uppercase tracking-wider">
+                Ouvindo sua voz
               </span>
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-slate-400 font-mono ml-1">
                 {formatSeconds(elapsedSeconds)}
               </span>
+
+              {/* Indicador de captação de som */}
+              {liveAudioLevel > 10 && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500" title="Detectando áudio no microfone"></span>
+              )}
             </div>
 
             {/* BOTÃO PARAR */}
             <button
               type="button"
               onClick={stopRecording}
-              className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center shadow-sm active:scale-95 transition-all mb-6"
-              title="Clique para parar"
+              className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center shadow-xs active:scale-95 transition-all mb-6"
+              title="Clique para parar e formatar o texto"
             >
               <Square className="w-6 h-6 fill-white mb-0.5" />
               <span className="text-[10px] font-semibold uppercase">Parar</span>
             </button>
 
-            {/* PRÉVIA DO TEXTO AO VIVO */}
-            {interimText ? (
-              <p className="text-base text-slate-700 font-normal italic max-w-md px-4">
-                "{interimText}"
+            {/* CAIXA DE TEXTO EM TEMPO REAL ENQUANTO FALA */}
+            <div className="w-full bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-left min-h-[100px] flex flex-col justify-between">
+              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider block mb-1">
+                Escrevendo o que você está falando:
+              </span>
+
+              <p className="text-base text-slate-800 leading-relaxed font-sans">
+                {liveTranscription ? (
+                  <span>{liveTranscription}</span>
+                ) : (
+                  <span className="text-slate-400 italic">Fale agora no microfone...</span>
+                )}
               </p>
-            ) : (
-              <p className="text-xs text-slate-400">
-                Fale agora no microfone...
-              </p>
-            )}
+
+              <div className="text-right text-[11px] text-slate-400 mt-2">
+                Clique em <strong>Parar</strong> para finalizar e arrumar o texto.
+              </div>
+            </div>
           </div>
         )}
 
-        {/* ESTADO 3: TEXTO PRONTO APÓS A FALA */}
-        {!isRecording && text && (
-          <div className="w-full flex flex-col items-center">
+        {/* ESTADO 3: TEXTO FINALIZADO E ARRUMADO + REPRODUTOR DE VOZ GRAVADA */}
+        {!isRecording && (finalText || audioUrl) && (
+          <div className="w-full flex flex-col items-center gap-4">
+            {/* PLAYER DA VOZ GRAVADA (SUA VOZ NUNCA SE PERDE!) */}
+            {audioUrl && (
+              <AudioPlayer audioUrl={audioUrl} recordedDuration={recordedDuration} />
+            )}
+
+            {/* CARTÃO DE TEXTO ARRUMADO */}
             <div className="w-full bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col gap-3">
               <div className="flex items-center justify-between text-xs text-slate-500 pb-2 border-b border-slate-100">
-                <span className="font-medium text-slate-700">Texto transcrito</span>
-                <span>{text.split(/\s+/).filter(Boolean).length} palavras</span>
+                <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-slate-600" />
+                  Texto Transcrito e Arrumado
+                </span>
+                <span>{finalText.split(/\s+/).filter(Boolean).length} palavras</span>
               </div>
 
-              {/* TEXTO TRANSRITO EDITÁVEL */}
+              {/* CAIXA DE TEXTO EDITÁVEL */}
               <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
+                value={finalText}
+                onChange={(e) => setFinalText(e.target.value)}
                 rows={6}
-                className="w-full bg-transparent text-slate-800 text-base leading-relaxed outline-none resize-none font-sans"
+                placeholder="Seu texto transcrito aparecerá aqui..."
+                className="w-full bg-transparent text-slate-800 text-base leading-relaxed outline-none resize-y font-sans"
               />
 
-              {/* BOTÕES DE AÇÃO */}
+              {/* BARRA DE AÇÕES */}
               <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2 flex-wrap">
                 {/* BOTÃO COPIAR PRINCIPAL */}
                 <button
@@ -388,6 +546,7 @@ export default function App() {
                       ? 'bg-emerald-600 text-white'
                       : 'bg-slate-900 hover:bg-slate-800 text-white'
                   }`}
+                  title="Copiar texto para área de transferência"
                 >
                   {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copied ? 'Copiado!' : 'Copiar texto'}</span>
@@ -397,9 +556,18 @@ export default function App() {
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
+                    onClick={handlePolishAgain}
+                    title="Dar aquela arrumada na pontuação novamente"
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleSpeakText}
-                    title={isSpeaking ? 'Parar leitura' : 'Ouvir texto'}
-                    className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
+                    title={isSpeaking ? 'Parar leitura' : 'Ouvir texto em voz alta'}
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
                   >
                     {isSpeaking ? <VolumeX className="w-4 h-4 text-red-600" /> : <Volume2 className="w-4 h-4" />}
                   </button>
@@ -407,8 +575,8 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleDownloadTxt}
-                    title="Baixar arquivo de texto"
-                    className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
+                    title="Baixar arquivo de texto (.txt)"
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
                   >
                     <Download className="w-4 h-4" />
                   </button>
@@ -416,8 +584,8 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleReset}
-                    title="Limpar texto"
-                    className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors"
+                    title="Limpar e gravar novo"
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -425,8 +593,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* BOTÃO FALAR NOVAMENTE */}
-            <div className="mt-5 flex items-center gap-3">
+            {/* BOTÕES DE NOVA GRAVAÇÃO */}
+            <div className="flex items-center gap-3 mt-1">
               <button
                 type="button"
                 onClick={startRecording}
@@ -449,13 +617,13 @@ export default function App() {
         )}
       </main>
 
-      {/* RODAPÉ DISCRETO */}
+      {/* RODAPÉ */}
       <footer className="w-full max-w-3xl mx-auto px-6 py-4 flex items-center justify-between text-[11px] text-slate-400">
         <span>Voz</span>
-        <span>Áudio processado no seu navegador</span>
+        <span>Áudio processado diretamente no seu navegador</span>
       </footer>
 
-      {/* CONFIGURAÇÕES (MODAL SEPARADO) */}
+      {/* MODAL DE CONFIGURAÇÕES */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -468,7 +636,7 @@ export default function App() {
         soundEffectsEnabled={soundEffectsEnabled}
         setSoundEffectsEnabled={setSoundEffectsEnabled}
         history={history}
-        onSelectHistoryItem={(h) => setText(h)}
+        onSelectHistoryItem={(h) => setFinalText(h)}
         onClearHistory={() => setHistory([])}
       />
     </div>
