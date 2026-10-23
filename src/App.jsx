@@ -669,26 +669,21 @@ export default function App() {
               <span className="text-[10px] font-semibold uppercase">Parar</span>
             </button>
 
-            {/* TUBINHO HORIZONTAL DE CAPTAÇÃO DE VOZ (QUANDO FALA O TUBO AUMENTA) */}
-            <div className="w-72 sm:w-96 mt-5 mb-5 flex flex-col items-center gap-2">
-              <div className="w-full h-4 bg-slate-200/90 rounded-full p-0.5 border border-slate-300 shadow-inner overflow-hidden flex items-center">
+            {/* TUBINHO HORIZONTAL DE PERCEPÇÃO DO SOM POR COR */}
+            <div className="w-64 sm:w-80 my-4 flex items-center justify-center">
+              <div className="w-full h-3.5 bg-slate-100 rounded-full p-0.5 border border-slate-200/90 shadow-inner overflow-hidden flex items-center">
                 <div
                   className={`h-full rounded-full transition-all duration-75 ease-out ${
-                    liveAudioLevel > 30
-                      ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-sky-500 shadow-sm'
-                      : liveAudioLevel > 5
-                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                      : 'bg-slate-300'
+                    liveAudioLevel > 45
+                      ? 'bg-gradient-to-r from-emerald-400 via-sky-400 to-indigo-500 shadow-xs'
+                      : liveAudioLevel > 10
+                      ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+                      : 'bg-slate-300/50'
                   }`}
-                  style={{ width: `${Math.max(liveAudioLevel > 0 ? 6 : 0, liveAudioLevel)}%` }}
+                  style={{
+                    width: `${Math.max(liveAudioLevel > 0 ? 4 : 0, liveAudioLevel)}%`
+                  }}
                 />
-              </div>
-              <div className="flex items-center justify-between w-full px-1 text-xs text-slate-500 font-medium">
-                <span className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full transition-colors ${liveAudioLevel > 5 ? 'bg-emerald-500 animate-ping' : 'bg-slate-300'}`} />
-                  Captação da sua voz
-                </span>
-                <span className="font-mono font-bold text-slate-700">{liveAudioLevel}%</span>
               </div>
             </div>
 
