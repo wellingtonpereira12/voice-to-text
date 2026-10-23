@@ -60,6 +60,8 @@ export default function App() {
   // Transcrição em Tempo Real e Final
   const [liveTranscription, setLiveTranscription] = useState('');
   const [finalText, setFinalText] = useState('');
+  const [baseText, setBaseText] = useState('');
+  const baseTextRef = useRef('');
   const [copied, setCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -236,8 +238,8 @@ export default function App() {
     }
   };
 
-  // INICIAR GRAVAÇÃO
-  const startRecording = async () => {
+  // INICIAR GRAVAÇÃO (NOVA OU CONTINUANDO A FALA ANTERIOR)
+  const startRecording = async (isContinuing = false) => {
     try {
       accumulatedTranscriptRef.current = '';
       interimTranscriptRef.current = '';
@@ -249,6 +251,17 @@ export default function App() {
       setDiagnosticNote('');
       hasBrowserSpeechRef.current = false;
       isStreamingBusyRef.current = false;
+
+      // Se for para continuar gravando, preserva o texto anterior como base
+      if (isContinuing && finalText.trim()) {
+        const textToKeep = finalText.trim();
+        baseTextRef.current = textToKeep;
+        setBaseText(textToKeep);
+      } else {
+        baseTextRef.current = '';
+        setBaseText('');
+        setFinalText('');
+      }
 
       // 1. Obter áudio do microfone
       const audioConstraints = selectedDeviceId && selectedDeviceId !== 'default'
@@ -526,16 +539,23 @@ export default function App() {
         }
       }
 
-      setFinalText((prev) => {
-        if (!prev || !appendMode) return polishedText;
-        return prev + '\n\n' + polishedText;
-      });
+      // Combina com o texto base anterior caso esteja no modo "Continuar gravando"
+      const prevBase = baseTextRef.current;
+      let finalCombinedText = polishedText;
+      if (prevBase) {
+        const needsSpace = !prevBase.endsWith('\n') && !prevBase.endsWith(' ');
+        finalCombinedText = prevBase + (needsSpace ? ' ' : '') + polishedText;
+      }
+
+      setFinalText(finalCombinedText);
+      setBaseText('');
+      baseTextRef.current = '';
 
       // Salva no histórico da sessão
       setHistory((prev) => [
         {
           id: Date.now().toString(),
-          text: polishedText,
+          text: finalCombinedText,
           duration,
           timestamp: new Date().toISOString()
         },
@@ -543,6 +563,11 @@ export default function App() {
       ]);
       setDiagnosticNote('');
     } else {
+      if (baseTextRef.current) {
+        setFinalText(baseTextRef.current);
+        setBaseText('');
+        baseTextRef.current = '';
+      }
       showToast('O áudio foi gravado, mas não foi possível identificar as palavras faladas. Você pode ouvir seu áudio acima.');
     }
 
@@ -673,6 +698,8 @@ export default function App() {
   // RESETAR TELA
   const handleReset = () => {
     setFinalText('');
+    setBaseText('');
+    baseTextRef.current = '';
     setLiveTranscription('');
     setAudioUrl(null);
     setAudioBlob(null);
@@ -791,24 +818,29 @@ export default function App() {
             )}
 
             {/* CAIXA DE TEXTO EM TEMPO REAL ENQUANTO FALA */}
-            <div className="w-full bg-white border border-slate-200 rounded-xl p-5 shadow-xs text-left min-h-[120px] flex flex-col justify-between">
+            <div className="w-full bg-white border border-slate-200 rounded-xl p-5 shadow-xs text-left min-h-[130px] flex flex-col justify-between">
               <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
-                Escrevendo o que você está falando em tempo real:
+                {baseText ? 'Continuando texto em tempo real:' : 'Escrevendo o que você está falando em tempo real:'}
               </span>
 
-              <p className="text-base text-slate-800 leading-relaxed font-sans min-h-[44px]">
+              <div className="text-base leading-relaxed font-sans min-h-[48px] break-words">
+                {baseText && (
+                  <span className="text-slate-600 whitespace-pre-wrap">{baseText}{' '}</span>
+                )}
                 {liveTranscription ? (
-                  <span>
+                  <span className="font-medium text-slate-900">
                     {liveTranscription}
                     <span className="inline-block w-1.5 h-4 ml-1 bg-slate-700 animate-pulse align-middle" />
                   </span>
                 ) : (
-                  <span className="text-slate-400 italic">Pode falar no microfone... o texto vai sendo preenchido aqui em tempo real.</span>
+                  <span className="text-slate-400 italic">
+                    {baseText ? 'Pode continuar falando... as novas palavras entrarão aqui.' : 'Pode falar no microfone... o texto vai sendo preenchido aqui em tempo real.'}
+                  </span>
                 )}
-              </p>
+              </div>
 
               <div className="text-right text-[11px] text-slate-400 mt-2">
-                Aperte <strong>Parar</strong> para finalizar e aplicar a pontuação automática.
+                Aperte <strong>Parar</strong> para finalizar e juntar o texto com pontuação.
               </div>
             </div>
           </div>
@@ -935,24 +967,39 @@ export default function App() {
               </div>
             </div>
 
-            {/* BOTÕES DE NOVA GRAVAÇÃO */}
-            <div className="flex items-center gap-3 mt-1">
+            {/* BOTÕES DE GRAVAÇÃO */}
+            <div className="flex items-center gap-3 mt-1 flex-wrap justify-center">
+              {/* BOTÃO CONTINUAR GRAVANDO (DE ONDE PAROU) */}
               <button
                 type="button"
-                onClick={startRecording}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-xs font-medium shadow-xs transition-colors"
+                onClick={() => startRecording(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-all active:scale-95"
+                title="Continuar falando e adicionando texto de onde parou"
               >
-                <Mic className="w-3.5 h-3.5 text-slate-600" />
-                <span>Gravar novamente</span>
+                <Mic className="w-4 h-4 text-emerald-400" />
+                <span>Continuar gravando</span>
               </button>
 
+              {/* BOTÃO COMEÇAR DO ZERO */}
+              <button
+                type="button"
+                onClick={() => startRecording(false)}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 text-slate-700 text-xs font-medium shadow-xs transition-colors"
+                title="Limpar e começar uma nova gravação"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Começar do zero</span>
+              </button>
+
+              {/* BOTÃO LIMPAR */}
               <button
                 type="button"
                 onClick={handleReset}
-                className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+                className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors px-2 py-2"
+                title="Limpar tela"
               >
-                <RotateCcw className="w-3 h-3" />
-                <span>Nova fala</span>
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Limpar</span>
               </button>
             </div>
           </div>
