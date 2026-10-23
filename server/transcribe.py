@@ -15,8 +15,6 @@ def transcribe_audio(file_path, language="pt-BR"):
 
         recognizer = sr.Recognizer()
         with sr.AudioFile(wav_path) as source:
-            # Ajusta para ruído ambiente curto
-            recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
 
         text = recognizer.recognize_google(audio_data, language=language)

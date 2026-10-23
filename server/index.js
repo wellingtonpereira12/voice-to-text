@@ -17,6 +17,17 @@ const PORT = process.env.PORT || 3080;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Redirecionamento automático do IP/HTTP para o domínio seguro HTTPS (https://voz.pampo.tech)
+app.use((req, res, next) => {
+  const host = req.headers.host || '';
+  // Se for acessado pelo IP ou diretamente na porta 3080 pelo navegador, redireciona para HTTPS
+  if (host.includes('187.127.17.88') || host.endsWith(':3080')) {
+    if (req.url === '/api/health') return next();
+    return res.redirect(301, 'https://voz.pampo.tech' + req.url);
+  }
+  next();
+});
+
 // Endpoint de Health Check
 app.get('/api/health', (req, res) => {
   res.json({

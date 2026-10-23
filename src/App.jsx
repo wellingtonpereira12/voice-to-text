@@ -114,18 +114,24 @@ export default function App() {
   // Enviar áudio gravado para o servidor para transcrição robusta (Garantia de 100%)
   const transcribeAudioViaServer = async (blobToTranscribe) => {
     try {
-      if (!blobToTranscribe) return '';
+      if (!blobToTranscribe || blobToTranscribe.size < 100) return '';
       setIsProcessing(true);
       setDiagnosticNote('Transcrevendo áudio gravado no servidor...');
 
-      const arrayBuffer = await blobToTranscribe.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let binary = '';
-      const len = uint8Array.byteLength;
-      for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(uint8Array[i]);
-      }
-      const base64Audio = btoa(binary);
+      const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          try {
+            const resultStr = reader.result || '';
+            const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+            resolve(base64);
+          } catch (e) {
+            reject(e);
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blobToTranscribe);
+      });
 
       const response = await fetch('/api/transcribe', {
         method: 'POST',
