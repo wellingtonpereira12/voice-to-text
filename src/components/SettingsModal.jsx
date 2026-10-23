@@ -167,22 +167,17 @@ export default function SettingsModal({
 
   // Testar chave de IA
   const handleTestAiKey = async () => {
-    if (!aiApiKey?.trim()) {
-      setAiTestResult({ success: false, error: 'Por favor, digite ou cole uma chave de API antes de testar.' });
-      return;
-    }
-
     setTestingAi(true);
     setAiTestResult(null);
 
     try {
-      const sample = 'ola amigo beleza tudo bem eu gostaria de saber como ta ficando o programa';
+      const sample = 'ola amigo beleza tudo bem eu gostaria de saber se a ia do programa ta funcionando';
       const res = await fetch('/api/ai-polish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: sample,
-          apiKey: aiApiKey.trim(),
+          apiKey: aiApiKey?.trim() || undefined,
           provider: aiProvider || 'gemini'
         })
       });
@@ -424,16 +419,22 @@ export default function SettingsModal({
                 }}
                 className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-slate-400"
               >
-                <option value="gemini">Google Gemini 2.0 Flash (Recomendado - Grátis)</option>
-                <option value="groq">Groq Llama 3.3 70B (Ultra rápido - Grátis)</option>
+                <option value="gemini">Google Gemini 2.5 Flash (Padrão Ativo - Grátis)</option>
+                <option value="groq">Groq Llama 3.3 70B (Grátis)</option>
               </select>
             </div>
 
             {/* Input da Chave da API */}
             <div>
-              <label className="text-xs font-medium text-slate-700 block mb-1">
-                Sua Chave de API Gratuita
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-slate-700">
+                  Chave de API
+                </label>
+                <span className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  Chave padrão já ativa
+                </span>
+              </div>
               <div className="relative flex items-center">
                 <input
                   type={showKey ? 'text' : 'password'}
@@ -442,7 +443,7 @@ export default function SettingsModal({
                     setAiApiKey(e.target.value);
                     localStorage.setItem('voz_ai_key', e.target.value.trim());
                   }}
-                  placeholder={aiProvider === 'gemini' ? 'Cole sua chave do Google (AIzaSy...)' : 'Cole sua chave do Groq (gsk_...)'}
+                  placeholder="Chave padrão já configurada no servidor (ou cole sua própria chave)"
                   className="w-full pl-2.5 pr-8 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 font-mono outline-none focus:border-slate-400"
                 />
                 <button

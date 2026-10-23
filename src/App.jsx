@@ -214,7 +214,6 @@ export default function App() {
   const requestAiPolish = async (textToPolish) => {
     try {
       const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
-      if (!key) return null;
 
       const response = await fetch('/api/ai-polish', {
         method: 'POST',
@@ -518,9 +517,8 @@ export default function App() {
       // Pontuação inteligente local (sempre imediata)
       let polishedText = formatAndPolishSpeech(spokenText);
 
-      // Se a IA estiver ativa e tiver chave configurada, aprimora com IA
-      const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
-      if (aiEnabled && key) {
+      // Se a IA estiver ativa, aprimora automaticamente com IA
+      if (aiEnabled) {
         setDiagnosticNote('Arrumando texto e pontuação com IA ✨...');
         const aiResult = await requestAiPolish(spokenText);
         if (aiResult) {
@@ -600,14 +598,6 @@ export default function App() {
   // Arrumar com IA manualmente pelo botão no texto
   const handleManualAiPolish = async () => {
     if (!finalText.trim()) return;
-
-    const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
-    if (!key) {
-      setSettingsTab('ia');
-      setIsSettingsOpen(true);
-      showToast('Insira sua chave gratuita da IA nas configurações para começar ✨');
-      return;
-    }
 
     setIsAiPolishing(true);
     setDiagnosticNote('Arrumando texto e pontuação com IA ✨...');

@@ -82,6 +82,8 @@ app.post('/api/transcribe', async (req, res) => {
   }
 });
 
+const DEFAULT_GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+
 // Endpoint de Correção e Pontuação Inteligente via IA (Gemini ou Groq)
 app.post('/api/ai-polish', async (req, res) => {
   try {
@@ -90,7 +92,7 @@ app.post('/api/ai-polish', async (req, res) => {
       return res.json({ success: true, polishedText: '' });
     }
 
-    const key = apiKey || process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
+    const key = apiKey || DEFAULT_GEMINI_KEY || process.env.GROQ_API_KEY;
 
     if (!key) {
       return res.json({ success: false, needKey: true, error: 'Nenhuma chave de IA configurada.' });
@@ -98,8 +100,8 @@ app.post('/api/ai-polish', async (req, res) => {
 
     console.log(`[API /api/ai-polish] Processando texto (${text.length} caracteres) via ${provider}...`);
 
-    // Google Gemini API (Gemini 2.0 Flash / 1.5 Flash)
-    if (provider === 'gemini' || key.startsWith('AIzaSy')) {
+    // Google Gemini API (Gemini 2.5 Flash / Flash Latest)
+    if (provider === 'gemini' || key.startsWith('AIzaSy') || key.startsWith('AQ.')) {
       const prompt = `Você é um assistente especialista em transcrição e língua portuguesa brasileira.
 Sua missão é pegar o texto falado que foi transcrito (que vem sem pontuação e desorganizado) e transformá-lo em um texto claro, natural e perfeitamente legível.
 
@@ -114,7 +116,7 @@ Retorne ESTRITAMENTE o texto corrigido e formatado.
 Texto falado a formatar:
 """${text}"""`;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
