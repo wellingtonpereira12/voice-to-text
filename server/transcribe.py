@@ -11,7 +11,10 @@ def transcribe_audio(file_path, language="pt-BR"):
             "ffmpeg", "-y", "-i", file_path,
             "-ar", "16000", "-ac", "1", "-f", "wav", wav_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode != 0:
+            sys.stderr.write(f"FFmpeg falhou: {res.stderr.decode('utf-8', errors='ignore')}\n")
+            return ""
 
         recognizer = sr.Recognizer()
         with sr.AudioFile(wav_path) as source:
@@ -20,9 +23,13 @@ def transcribe_audio(file_path, language="pt-BR"):
         text = recognizer.recognize_google(audio_data, language=language)
         return text
     except sr.UnknownValueError:
+        sys.stderr.write("Google Speech: audio inaudivel ou silencio.\n")
+        return ""
+    except sr.RequestError as e:
+        sys.stderr.write(f"Google Speech API erro de conexao: {e}\n")
         return ""
     except Exception as e:
-        sys.stderr.write(f"Erro na transcricao: {str(e)}\n")
+        sys.stderr.write(f"Erro na transcricao: {type(e).__name__} - {str(e)}\n")
         return ""
     finally:
         if os.path.exists(wav_path):

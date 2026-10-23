@@ -410,13 +410,20 @@ export default function App() {
   // Re-transcrever áudio manualmente se desejar
   const handleRetranscribe = async () => {
     if (!audioBlob) return;
-    const result = await transcribeAudioViaServer(audioBlob);
-    if (result) {
-      const polished = formatAndPolishSpeech(result);
-      setFinalText(polished);
-      showToast('Áudio re-transcrito com sucesso!');
-    } else {
-      showToast('Não foi possível identificar palavras no áudio.');
+    setIsProcessing(true);
+    setDiagnosticNote('Transcrevendo áudio gravado no servidor...');
+    try {
+      const result = await transcribeAudioViaServer(audioBlob);
+      if (result) {
+        const polished = formatAndPolishSpeech(result);
+        setFinalText(polished);
+        showToast('Áudio transcrito com sucesso! ✨');
+      } else {
+        showToast('Não foi possível identificar palavras faladas no áudio.');
+      }
+    } finally {
+      setIsProcessing(false);
+      setDiagnosticNote('');
     }
   };
 

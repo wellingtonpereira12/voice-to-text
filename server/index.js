@@ -43,6 +43,8 @@ app.get('/api/health', (req, res) => {
 app.post('/api/transcribe', async (req, res) => {
   try {
     const { audio, language = 'pt-BR' } = req.body;
+    console.log(`[API /api/transcribe] Nova requisição recebida (tamanho base64: ${audio ? audio.length : 0}, idioma: ${language})`);
+    
     if (!audio) {
       return res.status(400).json({ success: false, error: 'Nenhum áudio enviado' });
     }
@@ -50,6 +52,7 @@ app.post('/api/transcribe', async (req, res) => {
     const tempFile = path.join(__dirname, `temp_${Date.now()}_${Math.random().toString(36).slice(2)}.webm`);
     const buffer = Buffer.from(audio, 'base64');
     fs.writeFileSync(tempFile, buffer);
+    console.log(`[API /api/transcribe] Áudio salvo em arquivo temporário (${buffer.length} bytes): ${tempFile}`);
 
     const scriptPath = path.join(__dirname, 'transcribe.py');
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
@@ -61,16 +64,20 @@ app.post('/api/transcribe', async (req, res) => {
       } catch (e) {}
 
       if (error) {
-        console.error('Aviso na transcrição Python:', stderr || error.message);
-        // Mesmo se der erro no python, retorna formato amigável
+        console.error('[API /api/transcribe] Erro ao executar script Python:', stderr || error.message);
         return res.json({ success: false, text: '', error: stderr || error.message });
       }
 
+      if (stderr) {
+        console.log('[API /api/transcribe] Log do Python:', stderr.trim());
+      }
+
       const text = stdout ? stdout.trim() : '';
+      console.log(`[API /api/transcribe] Transcrição concluída: "${text}"`);
       res.json({ success: true, text });
     });
   } catch (err) {
-    console.error('Erro no endpoint /api/transcribe:', err);
+    console.error('[API /api/transcribe] Erro interno:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

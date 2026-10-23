@@ -15,8 +15,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3080
 
-# Instala python3, pip e ffmpeg para o serviço de transcrição do servidor
-RUN apk add --no-cache python3 py3-pip ffmpeg
+# Instala python3, pip, ffmpeg e flac para o serviço de transcrição do servidor
+RUN apk add --no-cache python3 py3-pip ffmpeg flac
 RUN pip install --break-system-packages SpeechRecognition
 
 COPY package*.json ./
