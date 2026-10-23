@@ -75,6 +75,11 @@ export default function App() {
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
 
+  // Controle de transcrição ao vivo universal (Opera, Chrome, Edge, etc.)
+  const hasBrowserSpeechRef = useRef(false);
+  const liveIntervalRef = useRef(null);
+  const isStreamingBusyRef = useRef(false);
+
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3500);
@@ -153,6 +158,41 @@ export default function App() {
     }
   };
 
+  // Transcrição silenciosa em segundo plano durante a fala (para preencher o texto ao vivo no Opera/Firefox)
+  const transcribeAudioViaServerSilently = async (blobToTranscribe) => {
+    try {
+      if (!blobToTranscribe || blobToTranscribe.size < 500) return '';
+      const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          try {
+            const resultStr = reader.result || '';
+            const base64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+            resolve(base64);
+          } catch (e) {
+            reject(e);
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blobToTranscribe);
+      });
+
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: base64Audio, language: language || 'pt-BR' })
+      });
+
+      const data = await response.json();
+      if (data && data.success && data.text) {
+        return data.text.trim();
+      }
+      return '';
+    } catch {
+      return '';
+    }
+  };
+
   // INICIAR GRAVAÇÃO
   const startRecording = async () => {
     try {
@@ -166,6 +206,8 @@ export default function App() {
       setCopied(false);
       setIsProcessing(false);
       setDiagnosticNote('');
+      hasBrowserSpeechRef.current = false;
+      isStreamingBusyRef.current = false;
 
       // 1. Obter áudio do microfone selecionado
       const audioConstraints = selectedDeviceId && selectedDeviceId !== 'default'
@@ -175,13 +217,21 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       mediaStreamRef.current = stream;
 
+      // Ativa gravação IMEDIATAMENTE antes do loop do analisador de áudio
+      isRecordingRef.current = true;
+      setIsRecording(true);
+
       // 2. Configurar Analisador de Volume em Tempo Real (TUBINHO HORIZONTAL)
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         audioContextRef.current = audioCtx;
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
+
         const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 128;
-        analyser.smoothingTimeConstant = 0.4;
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.2;
         analyserRef.current = analyser;
 
         const source = audioCtx.createMediaStreamSource(stream);
@@ -191,17 +241,13 @@ export default function App() {
         const checkLevel = () => {
           if (!isRecordingRef.current || !analyserRef.current) return;
           analyserRef.current.getByteFrequencyData(dataArray);
-          let sum = 0;
-          let peak = 0;
+          let maxVal = 0;
           for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-            if (dataArray[i] > peak) peak = dataArray[i];
+            if (dataArray[i] > maxVal) maxVal = dataArray[i];
           }
-          const avg = sum / dataArray.length;
-          // Fórmula ultra sensível para fala: o tubo reage instantaneamente a cada palavra
-          const rawScore = (avg * 1.8) + (peak * 0.5);
-          const normalized = Math.min(100, Math.max(0, Math.round((rawScore / 100) * 100)));
-          setLiveAudioLevel(normalized);
+          // Normalização ultra sensível para fala: maxVal varia de 20 a 180
+          const level = Math.min(100, Math.max(0, Math.round((maxVal / 150) * 100)));
+          setLiveAudioLevel(level);
           animFrameRef.current = requestAnimationFrame(checkLevel);
         };
         checkLevel();
@@ -233,62 +279,84 @@ export default function App() {
       // 4. Configurar Reconhecimento de Voz (SpeechRecognition)
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = language || 'pt-BR';
-        recognition.maxAlternatives = 1;
-
-        recognition.onresult = (event) => {
-          let currentInterim = '';
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              const cleanFinal = transcript.trim();
-              if (cleanFinal) {
-                accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? ' ' : '') + cleanFinal;
-              }
-            } else {
-              currentInterim += transcript;
-            }
-          }
-
-          interimTranscriptRef.current = currentInterim;
-
-          const fullCurrentLive = (
-            accumulatedTranscriptRef.current + (currentInterim ? ' ' + currentInterim : '')
-          ).trim();
-
-          setLiveTranscription(fullCurrentLive);
-        };
-
-        recognition.onerror = (event) => {
-          console.warn('SpeechRecognition event error:', event.error);
-          if (event.error === 'not-allowed') {
-            setDiagnosticNote('Acesso ao microfone foi bloqueado pelo navegador.');
-          } else if (event.error === 'network') {
-            setDiagnosticNote('Reconhecimento online do navegador bloqueado. O servidor fará a transcrição automática.');
-          }
-        };
-
-        recognition.onend = () => {
-          if (isRecordingRef.current) {
-            try {
-              recognition.start();
-            } catch (e) {}
-          }
-        };
-
-        recognitionRef.current = recognition;
         try {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = language || 'pt-BR';
+          recognition.maxAlternatives = 1;
+
+          recognition.onresult = (event) => {
+            hasBrowserSpeechRef.current = true;
+            let currentInterim = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const transcript = event.results[i][0].transcript;
+              if (event.results[i].isFinal) {
+                const cleanFinal = transcript.trim();
+                if (cleanFinal) {
+                  accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? ' ' : '') + cleanFinal;
+                }
+              } else {
+                currentInterim += transcript;
+              }
+            }
+
+            interimTranscriptRef.current = currentInterim;
+
+            const fullCurrentLive = (
+              accumulatedTranscriptRef.current + (currentInterim ? ' ' + currentInterim : '')
+            ).trim();
+
+            setLiveTranscription(fullCurrentLive);
+          };
+
+          recognition.onerror = (event) => {
+            console.warn('SpeechRecognition event error:', event.error);
+            if (event.error === 'not-allowed') {
+              setDiagnosticNote('Acesso ao microfone foi bloqueado pelo navegador.');
+            }
+          };
+
+          recognition.onend = () => {
+            if (isRecordingRef.current) {
+              try {
+                recognition.start();
+              } catch (e) {}
+            }
+          };
+
+          recognitionRef.current = recognition;
           recognition.start();
         } catch (e) {
-          console.error('Erro ao iniciar reconhecimento:', e);
+          console.warn('Erro ao iniciar SpeechRecognition:', e);
         }
       }
 
-      isRecordingRef.current = true;
-      setIsRecording(true);
+      // 5. Motor Universal em Tempo Real:
+      // Para navegadores sem WebSpeech nativo (como Opera/Firefox/Brave),
+      // enviamos o áudio a cada 2s para atualizar o texto ao vivo enquanto fala!
+      if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+      liveIntervalRef.current = setInterval(async () => {
+        if (!isRecordingRef.current) return;
+        if (hasBrowserSpeechRef.current) return;
+        if (isStreamingBusyRef.current) return;
+        if (audioChunksRef.current.length < 2) return;
+
+        try {
+          isStreamingBusyRef.current = true;
+          const currentBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+          if (currentBlob.size > 1500) {
+            const partialText = await transcribeAudioViaServerSilently(currentBlob);
+            if (partialText && isRecordingRef.current && !hasBrowserSpeechRef.current) {
+              setLiveTranscription(partialText);
+            }
+          }
+        } catch {
+          // ignora
+        } finally {
+          isStreamingBusyRef.current = false;
+        }
+      }, 2000);
 
       if (soundEffectsEnabled) playChime('start');
     } catch (err) {
@@ -303,6 +371,11 @@ export default function App() {
     isRecordingRef.current = false;
     setIsRecording(false);
     setIsProcessing(true);
+
+    if (liveIntervalRef.current) {
+      clearInterval(liveIntervalRef.current);
+      liveIntervalRef.current = null;
+    }
 
     const duration = elapsedSeconds;
     setRecordedDuration(duration);
@@ -351,14 +424,18 @@ export default function App() {
       mediaStreamRef.current = null;
     }
 
-    // 5. Coleta do texto capturado pelo navegador
+    // 5. Coleta do texto capturado pelo navegador ou pelo streaming ao vivo
     let spokenText = (
       accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
     ).trim();
 
-    // 6. SE O NAVEGADOR NÃO CAPTUROU (bug do Chrome/Brave/Pichau): TRANSCREVE AUTOMATICAMENTE PELO SERVIDOR!
-    if (!spokenText && capturedBlob) {
-      setDiagnosticNote('Transcrevendo áudio capturado no servidor...');
+    if (!spokenText && liveTranscription) {
+      spokenText = liveTranscription.trim();
+    }
+
+    // 6. Transcrição completa e precisa do áudio no servidor
+    if (capturedBlob) {
+      setDiagnosticNote('Processando texto final e pontuação no servidor...');
       const serverText = await transcribeAudioViaServer(capturedBlob);
       if (serverText) {
         spokenText = serverText;
@@ -397,6 +474,10 @@ export default function App() {
     isRecordingRef.current = false;
     setIsRecording(false);
     setIsProcessing(false);
+    if (liveIntervalRef.current) {
+      clearInterval(liveIntervalRef.current);
+      liveIntervalRef.current = null;
+    }
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
@@ -589,15 +670,24 @@ export default function App() {
             </button>
 
             {/* TUBINHO HORIZONTAL DE CAPTAÇÃO DE VOZ (QUANDO FALA O TUBO AUMENTA) */}
-            <div className="w-64 sm:w-80 mt-4 mb-6 flex flex-col items-center gap-1.5">
-              <div className="w-full h-3.5 bg-slate-200/90 rounded-full p-0.5 border border-slate-300 shadow-inner overflow-hidden">
+            <div className="w-72 sm:w-96 mt-5 mb-5 flex flex-col items-center gap-2">
+              <div className="w-full h-4 bg-slate-200/90 rounded-full p-0.5 border border-slate-300 shadow-inner overflow-hidden flex items-center">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-600 transition-all duration-75 ease-out"
-                  style={{ width: `${Math.max(liveAudioLevel > 0 ? 8 : 0, liveAudioLevel)}%` }}
+                  className={`h-full rounded-full transition-all duration-75 ease-out ${
+                    liveAudioLevel > 30
+                      ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-sky-500 shadow-sm'
+                      : liveAudioLevel > 5
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                      : 'bg-slate-300'
+                  }`}
+                  style={{ width: `${Math.max(liveAudioLevel > 0 ? 6 : 0, liveAudioLevel)}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between w-full px-1 text-[10px] text-slate-500">
-                <span>Captação da sua voz</span>
+              <div className="flex items-center justify-between w-full px-1 text-xs text-slate-500 font-medium">
+                <span className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full transition-colors ${liveAudioLevel > 5 ? 'bg-emerald-500 animate-ping' : 'bg-slate-300'}`} />
+                  Captação da sua voz
+                </span>
                 <span className="font-mono font-bold text-slate-700">{liveAudioLevel}%</span>
               </div>
             </div>
@@ -610,16 +700,19 @@ export default function App() {
             )}
 
             {/* CAIXA DE TEXTO EM TEMPO REAL ENQUANTO FALA */}
-            <div className="w-full bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-left min-h-[110px] flex flex-col justify-between">
-              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider block mb-1">
-                Escrevendo o que você está falando:
+            <div className="w-full bg-white border border-slate-200 rounded-xl p-5 shadow-xs text-left min-h-[120px] flex flex-col justify-between">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1">
+                Escrevendo o que você está falando em tempo real:
               </span>
 
-              <p className="text-base text-slate-800 leading-relaxed font-sans">
+              <p className="text-base text-slate-800 leading-relaxed font-sans min-h-[44px]">
                 {liveTranscription ? (
-                  <span>{liveTranscription}</span>
+                  <span>
+                    {liveTranscription}
+                    <span className="inline-block w-1.5 h-4 ml-1 bg-slate-700 animate-pulse align-middle" />
+                  </span>
                 ) : (
-                  <span className="text-slate-400 italic">Pode falar no microfone... o texto vai aparecer aqui em tempo real.</span>
+                  <span className="text-slate-400 italic">Pode falar no microfone... o texto vai sendo preenchido aqui em tempo real.</span>
                 )}
               </p>
 
