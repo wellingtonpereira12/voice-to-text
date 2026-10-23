@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { execFile } from 'child_process';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -13,17 +15,53 @@ const app = express();
 const PORT = process.env.PORT || 3080;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // Endpoint de Health Check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    app: 'voice-to-text',
-    version: '1.0.0',
+    app: 'voz',
+    version: '1.2.0',
     timestamp: new Date().toISOString(),
     uptime: Math.round(process.uptime())
   });
+});
+
+// Endpoint de Transcrição Robusta no Servidor via Python + SpeechRecognition / FFmpeg
+app.post('/api/transcribe', async (req, res) => {
+  try {
+    const { audio, language = 'pt-BR' } = req.body;
+    if (!audio) {
+      return res.status(400).json({ success: false, error: 'Nenhum áudio enviado' });
+    }
+
+    const tempFile = path.join(__dirname, `temp_${Date.now()}_${Math.random().toString(36).slice(2)}.webm`);
+    const buffer = Buffer.from(audio, 'base64');
+    fs.writeFileSync(tempFile, buffer);
+
+    const scriptPath = path.join(__dirname, 'transcribe.py');
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+    execFile(pythonCmd, [scriptPath, tempFile, language], (error, stdout, stderr) => {
+      // Limpeza do arquivo temporário
+      try {
+        if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      } catch (e) {}
+
+      if (error) {
+        console.error('Aviso na transcrição Python:', stderr || error.message);
+        // Mesmo se der erro no python, retorna formato amigável
+        return res.json({ success: false, text: '', error: stderr || error.message });
+      }
+
+      const text = stdout ? stdout.trim() : '';
+      res.json({ success: true, text });
+    });
+  } catch (err) {
+    console.error('Erro no endpoint /api/transcribe:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Servir arquivos estáticos da pasta dist gerada pelo Vite

@@ -12,7 +12,8 @@ import {
   RotateCcw,
   Sparkles,
   FileText,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 import SettingsModal from './components/SettingsModal';
 import AudioPlayer from './components/AudioPlayer';
@@ -36,6 +37,7 @@ export default function App() {
 
   // Áudio Gravado
   const [audioUrl, setAudioUrl] = useState(null);
+  const [audioBlob, setAudioBlob] = useState(null);
   const [recordedDuration, setRecordedDuration] = useState(0);
 
   // Transcrição em Tempo Real e Final
@@ -44,6 +46,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [diagnosticNote, setDiagnosticNote] = useState('');
 
   // Histórico na Sessão
   const [history, setHistory] = useState(() => {
@@ -61,14 +64,13 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const isRecordingRef = useRef(false);
-  const isStoppingRef = useRef(false);
   const timerIntervalRef = useRef(null);
 
-  // Textos acumulados em refs para eliminar problemas de fechamento (closures)
+  // Textos acumulados em refs para eliminar problemas de closures desatualizadas
   const accumulatedTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
 
-  // Analisador de volume para o microfone
+  // Analisador de volume para o microfone (Tubinho)
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
@@ -109,6 +111,42 @@ export default function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Enviar áudio gravado para o servidor para transcrição robusta (Garantia de 100%)
+  const transcribeAudioViaServer = async (blobToTranscribe) => {
+    try {
+      if (!blobToTranscribe) return '';
+      setIsProcessing(true);
+      setDiagnosticNote('Transcrevendo áudio gravado no servidor...');
+
+      const arrayBuffer = await blobToTranscribe.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      let binary = '';
+      const len = uint8Array.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+      }
+      const base64Audio = btoa(binary);
+
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: base64Audio, language: language || 'pt-BR' })
+      });
+
+      const data = await response.json();
+      if (data && data.success && data.text) {
+        return data.text.trim();
+      }
+      return '';
+    } catch (err) {
+      console.warn('Erro ao chamar /api/transcribe:', err);
+      return '';
+    } finally {
+      setDiagnosticNote('');
+      setIsProcessing(false);
+    }
+  };
+
   // INICIAR GRAVAÇÃO
   const startRecording = async () => {
     try {
@@ -116,12 +154,12 @@ export default function App() {
       accumulatedTranscriptRef.current = '';
       interimTranscriptRef.current = '';
       audioChunksRef.current = [];
-      isStoppingRef.current = false;
       setLiveTranscription('');
       setElapsedSeconds(0);
       setLiveAudioLevel(0);
       setCopied(false);
       setIsProcessing(false);
+      setDiagnosticNote('');
 
       // 1. Obter áudio do microfone selecionado
       const audioConstraints = selectedDeviceId && selectedDeviceId !== 'default'
@@ -131,14 +169,15 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       mediaStreamRef.current = stream;
 
-      // 2. Configurar Analisador de Volume em Tempo Real (TUBINHO)
+      // 2. Configurar Analisador de Volume em Tempo Real (TUBINHO HORIZONTAL)
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         audioContextRef.current = audioCtx;
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 128;
-        analyser.smoothingTimeConstant = 0.5;
+        analyser.smoothingTimeConstant = 0.4;
         analyserRef.current = analyser;
+
         const source = audioCtx.createMediaStreamSource(stream);
         source.connect(analyser);
 
@@ -153,9 +192,9 @@ export default function App() {
             if (dataArray[i] > peak) peak = dataArray[i];
           }
           const avg = sum / dataArray.length;
-          // Combinação sensível de média + pico para a voz humana
-          const rawScore = (avg * 1.7) + (peak * 0.4);
-          const normalized = Math.min(100, Math.max(0, Math.round((rawScore / 110) * 100)));
+          // Fórmula ultra sensível para fala: o tubo reage instantaneamente a cada palavra
+          const rawScore = (avg * 1.8) + (peak * 0.5);
+          const normalized = Math.min(100, Math.max(0, Math.round((rawScore / 100) * 100)));
           setLiveAudioLevel(normalized);
           animFrameRef.current = requestAnimationFrame(checkLevel);
         };
@@ -164,7 +203,7 @@ export default function App() {
         console.warn('Erro ao inicializar analisador de áudio:', err);
       }
 
-      // 3. Configurar MediaRecorder para capturar e salvar a gravação da voz
+      // 3. Configurar MediaRecorder para gravar áudio em segundo plano
       let mimeType = 'audio/webm;codecs=opus';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = MediaRecorder.isTypeSupported('audio/webm') 
@@ -183,16 +222,7 @@ export default function App() {
         }
       };
 
-      recorder.onstop = () => {
-        if (audioChunksRef.current.length > 0) {
-          const type = recorder.mimeType || 'audio/webm';
-          const blob = new Blob(audioChunksRef.current, { type });
-          const url = URL.createObjectURL(blob);
-          setAudioUrl(url);
-        }
-      };
-
-      recorder.start(200);
+      recorder.start(250);
 
       // 4. Configurar Reconhecimento de Voz (SpeechRecognition)
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -219,57 +249,27 @@ export default function App() {
 
           interimTranscriptRef.current = currentInterim;
 
-          // Texto ao vivo atualizado em tempo real na tela
           const fullCurrentLive = (
             accumulatedTranscriptRef.current + (currentInterim ? ' ' + currentInterim : '')
           ).trim();
 
           setLiveTranscription(fullCurrentLive);
-
-          // Se o usuário já clicou em parar e chegou o resultado final tardio do Google:
-          if (isStoppingRef.current && fullCurrentLive) {
-            const polished = formatAndPolishSpeech(fullCurrentLive);
-            setFinalText((prev) => (!prev || !appendMode) ? polished : prev + '\n\n' + polished);
-            setIsProcessing(false);
-          }
         };
 
         recognition.onerror = (event) => {
           console.warn('SpeechRecognition event error:', event.error);
           if (event.error === 'not-allowed') {
-            showToast('Acesso ao microfone foi negado pelo navegador.');
+            setDiagnosticNote('Acesso ao microfone foi bloqueado pelo navegador.');
           } else if (event.error === 'network') {
-            showToast('Serviço de voz do navegador oscilou. Tente falar novamente.');
+            setDiagnosticNote('Reconhecimento online do navegador bloqueado. O servidor fará a transcrição automática.');
           }
         };
 
         recognition.onend = () => {
-          // Se ainda está gravando, reinicia automaticamente
-          if (isRecordingRef.current && !isStoppingRef.current) {
+          if (isRecordingRef.current) {
             try {
               recognition.start();
             } catch (e) {}
-          } else if (isStoppingRef.current) {
-            // Quando a sessão de fala termina definitivamente:
-            const fullSpoken = (
-              accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
-            ).trim();
-
-            if (fullSpoken) {
-              const polished = formatAndPolishSpeech(fullSpoken);
-              setFinalText((prev) => (!prev || !appendMode) ? polished : prev + '\n\n' + polished);
-              // Salva histórico
-              setHistory((prev) => [
-                {
-                  id: Date.now().toString(),
-                  text: polished,
-                  duration: elapsedSeconds,
-                  timestamp: new Date().toISOString()
-                },
-                ...prev.slice(0, 19)
-              ]);
-            }
-            setIsProcessing(false);
           }
         };
 
@@ -279,8 +279,6 @@ export default function App() {
         } catch (e) {
           console.error('Erro ao iniciar reconhecimento:', e);
         }
-      } else {
-        alert('Seu navegador não possui suporte ao reconhecimento de voz nativo. Recomendamos usar o Google Chrome ou Microsoft Edge.');
       }
 
       isRecordingRef.current = true;
@@ -294,10 +292,9 @@ export default function App() {
     }
   };
 
-  // PARAR GRAVAÇÃO E FORMATAR O TEXTO (COM RESOLUÇÃO DO DELAY DO GOOGLE)
-  const stopRecording = () => {
+  // PARAR GRAVAÇÃO E FORMATAR O TEXTO (COM DUPLO MOTOR: NAVEGADOR + SERVIDOR WHISPER/GOOGLE)
+  const stopRecording = async () => {
     isRecordingRef.current = false;
-    isStoppingRef.current = true;
     setIsRecording(false);
     setIsProcessing(true);
 
@@ -312,60 +309,86 @@ export default function App() {
     }
     setLiveAudioLevel(0);
 
-    // 2. Parar gravador de áudio
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
-        console.error('Erro ao parar gravação:', e);
-      }
-    }
-
-    // 3. Parar tracks do stream
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    // 4. Parar reconhecimento de voz
+    // 2. Parar reconhecimento de voz do navegador
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch (e) {}
     }
 
-    // 5. Coleta imediata do que já foi recebido até agora
-    const initialRawText = (
+    // 3. Parar MediaRecorder e obter o Blob de áudio
+    let capturedBlob = null;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      await new Promise((resolve) => {
+        mediaRecorderRef.current.onstop = () => {
+          if (audioChunksRef.current.length > 0) {
+            const type = mediaRecorderRef.current.mimeType || 'audio/webm';
+            const blob = new Blob(audioChunksRef.current, { type });
+            capturedBlob = blob;
+            setAudioBlob(blob);
+            const url = URL.createObjectURL(blob);
+            setAudioUrl(url);
+          }
+          resolve();
+        };
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (e) {
+          resolve();
+        }
+      });
+    }
+
+    // 4. Parar tracks do stream
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    // 5. Coleta do texto capturado pelo navegador
+    let spokenText = (
       accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
     ).trim();
 
-    if (initialRawText) {
-      const polished = formatAndPolishSpeech(initialRawText);
-      setFinalText((prev) => (!prev || !appendMode) ? polished : prev + '\n\n' + polished);
-      setIsProcessing(false);
-    } else {
-      // Dá uma janela de 800ms para receber o último pacote assíncrono do Google Speech API
-      setTimeout(() => {
-        const lateRawText = (
-          accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
-        ).trim();
-
-        if (lateRawText) {
-          const polished = formatAndPolishSpeech(lateRawText);
-          setFinalText((prev) => (!prev || !appendMode) ? polished : prev + '\n\n' + polished);
-        } else {
-          showToast('O áudio foi gravado com sucesso! Se falou muito baixo ou rápido, tente falar mais perto do microfone.');
-        }
-        setIsProcessing(false);
-      }, 800);
+    // 6. SE O NAVEGADOR NÃO CAPTUROU (bug do Chrome/Brave/Pichau): TRANSCREVE AUTOMATICAMENTE PELO SERVIDOR!
+    if (!spokenText && capturedBlob) {
+      setDiagnosticNote('Transcrevendo áudio capturado no servidor...');
+      const serverText = await transcribeAudioViaServer(capturedBlob);
+      if (serverText) {
+        spokenText = serverText;
+      }
     }
 
+    // 7. APLICA AQUELA ARRUMADA BACANA NO TEXTO (PONTUAÇÃO, MAIÚSCULAS, FORMATAÇÃO)
+    if (spokenText) {
+      const polishedText = formatAndPolishSpeech(spokenText);
+
+      setFinalText((prev) => {
+        if (!prev || !appendMode) return polishedText;
+        return prev + '\n\n' + polishedText;
+      });
+
+      // Salva no histórico da sessão
+      setHistory((prev) => [
+        {
+          id: Date.now().toString(),
+          text: polishedText,
+          duration,
+          timestamp: new Date().toISOString()
+        },
+        ...prev.slice(0, 19)
+      ]);
+      setDiagnosticNote('');
+    } else {
+      showToast('O áudio foi gravado, mas não foi possível identificar as palavras faladas. Você pode ouvir seu áudio acima.');
+    }
+
+    setIsProcessing(false);
     if (soundEffectsEnabled) playChime('stop');
   };
 
   const stopRecordingCleanup = () => {
     isRecordingRef.current = false;
-    isStoppingRef.current = false;
     setIsRecording(false);
     setIsProcessing(false);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
@@ -375,6 +398,19 @@ export default function App() {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
+    }
+  };
+
+  // Re-transcrever áudio manualmente se desejar
+  const handleRetranscribe = async () => {
+    if (!audioBlob) return;
+    const result = await transcribeAudioViaServer(audioBlob);
+    if (result) {
+      const polished = formatAndPolishSpeech(result);
+      setFinalText(polished);
+      showToast('Áudio re-transcrito com sucesso!');
+    } else {
+      showToast('Não foi possível identificar palavras no áudio.');
     }
   };
 
@@ -441,14 +477,16 @@ export default function App() {
     showToast('Texto reformatado com sucesso!');
   };
 
-  // LIMPAR E COMEÇAR DE NOVO
+  // LIMPAR
   const handleReset = () => {
     setFinalText('');
     setLiveTranscription('');
     setAudioUrl(null);
+    setAudioBlob(null);
     setRecordedDuration(0);
     setCopied(false);
     setIsProcessing(false);
+    setDiagnosticNote('');
     if (isSpeaking && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       setIsSpeaking(false);
@@ -490,7 +528,7 @@ export default function App() {
               Toque no microfone para falar
             </h1>
             <p className="text-xs text-slate-500 mb-8 max-w-sm">
-              Conforme você fala, o texto aparece na tela. Ao parar, o texto é arrumado e fica pronto para copiar.
+              Conforme você fala, o tubinho aumenta e o texto aparece na tela. Ao parar, ele é arrumado para copiar.
             </p>
 
             {/* BOTÃO DO MICROFONE */}
@@ -502,10 +540,18 @@ export default function App() {
             >
               <Mic className="w-8 h-8" />
             </button>
+
+            {/* TUBINHO INDICADOR HORIZONTAL DE REPOUSO */}
+            <div className="w-64 sm:w-80 mt-6 flex flex-col items-center gap-1">
+              <div className="w-full h-3 bg-slate-200/70 rounded-full overflow-hidden border border-slate-300/80">
+                <div className="h-full bg-slate-300 w-1 rounded-full" />
+              </div>
+              <span className="text-[10px] text-slate-400">Microfone pronto para falar</span>
+            </div>
           </div>
         )}
 
-        {/* ESTADO 2: GRAVANDO (COM O TUBINHO HORIZONTAL DE VOLUME E ESCRITA AO VIVO) */}
+        {/* ESTADO 2: GRAVANDO (COM O TUBINHO HORIZONTAL QUE AUMENTA QUANDO FALA) */}
         {isRecording && (
           <div className="w-full flex flex-col items-center text-center">
             <div className="flex items-center gap-2 mb-3">
@@ -534,14 +580,21 @@ export default function App() {
               <div className="w-full h-3.5 bg-slate-200/90 rounded-full p-0.5 border border-slate-300 shadow-inner overflow-hidden">
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-600 transition-all duration-75 ease-out"
-                  style={{ width: `${Math.max(liveAudioLevel > 0 ? 6 : 0, liveAudioLevel)}%` }}
+                  style={{ width: `${Math.max(liveAudioLevel > 0 ? 8 : 0, liveAudioLevel)}%` }}
                 />
               </div>
               <div className="flex items-center justify-between w-full px-1 text-[10px] text-slate-500">
-                <span>Captação do microfone</span>
-                <span className="font-mono font-semibold text-slate-700">{liveAudioLevel}%</span>
+                <span>Captação da sua voz</span>
+                <span className="font-mono font-bold text-slate-700">{liveAudioLevel}%</span>
               </div>
             </div>
+
+            {/* AVISO DE DIAGNÓSTICO (CASO O NAVEGADOR BLOQUEIE A REDE) */}
+            {diagnosticNote && (
+              <div className="mb-3 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs text-left max-w-md">
+                {diagnosticNote}
+              </div>
+            )}
 
             {/* CAIXA DE TEXTO EM TEMPO REAL ENQUANTO FALA */}
             <div className="w-full bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-left min-h-[110px] flex flex-col justify-between">
@@ -558,26 +611,40 @@ export default function App() {
               </p>
 
               <div className="text-right text-[11px] text-slate-400 mt-2">
-                Aperte <strong>Parar</strong> para formatar e copiar.
+                Aperte <strong>Parar</strong> para finalizar e arrumar o texto.
               </div>
             </div>
           </div>
         )}
 
-        {/* ESTADO 3: PROCESSANDO FINALIZAÇÃO (JANELA DE SINCRONIZAÇÃO) */}
+        {/* ESTADO 3: PROCESSANDO FINALIZAÇÃO */}
         {isProcessing && (
-          <div className="py-12 flex flex-col items-center gap-2 text-slate-600 animate-in fade-in">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-700" />
-            <span className="text-xs font-medium">Finalizando e arrumando o texto...</span>
+          <div className="py-12 flex flex-col items-center gap-2.5 text-slate-600 animate-in fade-in">
+            <Loader2 className="w-6 h-6 animate-spin text-slate-800" />
+            <span className="text-xs font-semibold text-slate-700">
+              {diagnosticNote || 'Finalizando e arrumando a transcrição...'}
+            </span>
           </div>
         )}
 
         {/* ESTADO 4: TEXTO FINALIZADO E ARRUMADO + REPRODUTOR DE VOZ GRAVADA */}
         {!isRecording && !isProcessing && (finalText || audioUrl) && (
           <div className="w-full flex flex-col items-center gap-4">
-            {/* PLAYER DA VOZ GRAVADA (SUA VOZ NUNCA SE PERDE!) */}
+            {/* PLAYER DA VOZ GRAVADA COM BOTÃO DE RE-TRANSCREVER */}
             {audioUrl && (
-              <AudioPlayer audioUrl={audioUrl} recordedDuration={recordedDuration} />
+              <div className="w-full space-y-2">
+                <AudioPlayer audioUrl={audioUrl} recordedDuration={recordedDuration} />
+                {!finalText && audioBlob && (
+                  <button
+                    type="button"
+                    onClick={handleRetranscribe}
+                    className="w-full py-2 px-3 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg text-xs font-medium text-blue-700 flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Clique para forçar transcrição deste áudio gravado</span>
+                  </button>
+                )}
+              </div>
             )}
 
             {/* CARTÃO DE TEXTO ARRUMADO */}
