@@ -82,6 +82,103 @@ app.post('/api/transcribe', async (req, res) => {
   }
 });
 
+// Endpoint de Correção e Pontuação Inteligente via IA (Gemini ou Groq)
+app.post('/api/ai-polish', async (req, res) => {
+  try {
+    const { text, apiKey, provider = 'gemini' } = req.body;
+    if (!text || !text.trim()) {
+      return res.json({ success: true, polishedText: '' });
+    }
+
+    const key = apiKey || process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
+
+    if (!key) {
+      return res.json({ success: false, needKey: true, error: 'Nenhuma chave de IA configurada.' });
+    }
+
+    console.log(`[API /api/ai-polish] Processando texto (${text.length} caracteres) via ${provider}...`);
+
+    // Google Gemini API (Gemini 2.0 Flash / 1.5 Flash)
+    if (provider === 'gemini' || key.startsWith('AIzaSy')) {
+      const prompt = `Você é um assistente especialista em transcrição e língua portuguesa brasileira.
+Sua missão é pegar o texto falado que foi transcrito (que vem sem pontuação e desorganizado) e transformá-lo em um texto claro, natural e perfeitamente legível.
+
+Regras fundamentais:
+1. Adicione pontuação gramaticalmente correta (vírgulas, pontos finais, pontos de interrogação onde couber).
+2. Divida em parágrafos coerentes quando o assunto mudar ou houver uma quebra natural de raciocínio.
+3. Ajuste concordâncias e remova repetições involuntárias ou gaguejos da fala (como "tipo assim", "né", "ééé", "tá ligado", "sabe"), mantendo o tom natural.
+4. Mantenha fielmente o sentido e as ideias originais do usuário. Não altere os fatos.
+5. NUNCA responda à fala, NUNCA adicione introduções ou comentários seus como "Aqui está o texto revisado:".
+Retorne ESTRITAMENTE o texto corrigido e formatado.
+
+Texto falado a formatar:
+"""${text}"""`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 2048,
+          }
+        })
+      });
+
+      const data = await response.json();
+      if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        const polished = data.candidates[0].content.parts[0].text.trim();
+        console.log(`[API /api/ai-polish] Sucesso Gemini: ${polished.length} caracteres.`);
+        return res.json({ success: true, polishedText: polished });
+      } else if (data?.error?.message) {
+        console.error('[API /api/ai-polish] Erro Gemini API:', data.error.message);
+        return res.json({ success: false, error: data.error.message });
+      }
+    }
+
+    // Groq API (Llama 3.3 70B)
+    if (provider === 'groq' || key.startsWith('gsk_')) {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${key}`
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            {
+              role: 'system',
+              content: 'Você é um assistente especialista em transcrição e língua portuguesa. Receba a fala transcrita, adicione pontuação (vírgulas, pontos, interrogações), parágrafos e correções gramaticais naturais. Não responda ao usuário, devolva apenas o texto revisado.'
+            },
+            {
+              role: 'user',
+              content: text
+            }
+          ],
+          temperature: 0.2
+        })
+      });
+
+      const data = await response.json();
+      if (data?.choices?.[0]?.message?.content) {
+        const polished = data.choices[0].message.content.trim();
+        console.log(`[API /api/ai-polish] Sucesso Groq: ${polished.length} caracteres.`);
+        return res.json({ success: true, polishedText: polished });
+      } else if (data?.error?.message) {
+        console.error('[API /api/ai-polish] Erro Groq API:', data.error.message);
+        return res.json({ success: false, error: data.error.message });
+      }
+    }
+
+    return res.json({ success: false, error: 'Provedor ou formato de chave não reconhecido.' });
+  } catch (err) {
+    console.error('[API /api/ai-polish] Erro interno:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Servir arquivos estáticos da pasta dist gerada pelo Vite
 const distPath = path.join(__dirname, '../dist');
 app.use(express.static(distPath));

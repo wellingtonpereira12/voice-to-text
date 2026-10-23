@@ -22,6 +22,7 @@ import { formatAndPolishSpeech } from './utils/textFormatter';
 
 export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('audio');
   const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
     return localStorage.getItem('voz_mic_device_id') || '';
   });
@@ -29,11 +30,27 @@ export default function App() {
   const [appendMode, setAppendMode] = useState(false);
   const [soundEffectsEnabled, setSoundEffectsEnabled] = useState(true);
 
+  // Estados de IA para Correção e Pontuação
+  const [aiEnabled, setAiEnabled] = useState(() => {
+    return localStorage.getItem('voz_ai_enabled') !== 'false';
+  });
+  const [aiProvider, setAiProvider] = useState(() => {
+    return localStorage.getItem('voz_ai_provider') || 'gemini';
+  });
+  const [aiApiKey, setAiApiKey] = useState(() => {
+    return localStorage.getItem('voz_ai_key') || '';
+  });
+  const [isAiPolishing, setIsAiPolishing] = useState(false);
+
   // Estados de Gravação e Processamento
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [liveAudioLevel, setLiveAudioLevel] = useState(0);
+
+  // Equalizador Musical Suave de 5 Barras (física de Attack e Decay suave)
+  const [audioBars, setAudioBars] = useState([6, 6, 6, 6, 6]);
+  const barsRef = useRef([6, 6, 6, 6, 6]);
+  const lastRenderTimeRef = useRef(0);
 
   // Áudio Gravado
   const [audioUrl, setAudioUrl] = useState(null);
@@ -66,11 +83,11 @@ export default function App() {
   const isRecordingRef = useRef(false);
   const timerIntervalRef = useRef(null);
 
-  // Textos acumulados em refs para eliminar problemas de closures desatualizadas
+  // Textos acumulados em refs
   const accumulatedTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
 
-  // Analisador de volume para o microfone (Tubinho)
+  // Analisador de áudio
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
@@ -116,12 +133,12 @@ export default function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Enviar áudio gravado para o servidor para transcrição robusta (Garantia de 100%)
+  // Enviar áudio gravado para o servidor para transcrição robusta
   const transcribeAudioViaServer = async (blobToTranscribe) => {
     try {
       if (!blobToTranscribe || blobToTranscribe.size < 100) return '';
       setIsProcessing(true);
-      setDiagnosticNote('Transcrevendo áudio gravado no servidor...');
+      setDiagnosticNote('Transcrevendo áudio no servidor...');
 
       const base64Audio = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -158,7 +175,7 @@ export default function App() {
     }
   };
 
-  // Transcrição silenciosa em segundo plano durante a fala (para preencher o texto ao vivo no Opera/Firefox)
+  // Transcrição silenciosa em segundo plano durante a fala (para navegadores sem WebSpeech nativo)
   const transcribeAudioViaServerSilently = async (blobToTranscribe) => {
     try {
       if (!blobToTranscribe || blobToTranscribe.size < 500) return '';
@@ -193,23 +210,48 @@ export default function App() {
     }
   };
 
+  // Polimento com IA (Gemini / Groq)
+  const requestAiPolish = async (textToPolish) => {
+    try {
+      const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
+      if (!key) return null;
+
+      const response = await fetch('/api/ai-polish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: textToPolish,
+          apiKey: key,
+          provider: aiProvider || 'gemini'
+        })
+      });
+
+      const data = await response.json();
+      if (data && data.success && data.polishedText) {
+        return data.polishedText.trim();
+      }
+      return null;
+    } catch (e) {
+      console.warn('Erro ao polir com IA:', e);
+      return null;
+    }
+  };
+
   // INICIAR GRAVAÇÃO
   const startRecording = async () => {
     try {
-      // Limpeza de estados anteriores
       accumulatedTranscriptRef.current = '';
       interimTranscriptRef.current = '';
       audioChunksRef.current = [];
       setLiveTranscription('');
       setElapsedSeconds(0);
-      setLiveAudioLevel(0);
       setCopied(false);
       setIsProcessing(false);
       setDiagnosticNote('');
       hasBrowserSpeechRef.current = false;
       isStreamingBusyRef.current = false;
 
-      // 1. Obter áudio do microfone selecionado
+      // 1. Obter áudio do microfone
       const audioConstraints = selectedDeviceId && selectedDeviceId !== 'default'
         ? { deviceId: { ideal: selectedDeviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
@@ -217,11 +259,10 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       mediaStreamRef.current = stream;
 
-      // Ativa gravação IMEDIATAMENTE antes do loop do analisador de áudio
       isRecordingRef.current = true;
       setIsRecording(true);
 
-      // 2. Configurar Analisador de Volume em Tempo Real (TUBINHO HORIZONTAL)
+      // 2. Configurar Analisador de Áudio Suave (Equalizador Musical de 5 Barras com Attack/Decay)
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         audioContextRef.current = audioCtx;
@@ -231,23 +272,56 @@ export default function App() {
 
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.2;
+        analyser.smoothingTimeConstant = 0.5;
         analyserRef.current = analyser;
 
         const source = audioCtx.createMediaStreamSource(stream);
         source.connect(analyser);
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        barsRef.current = [6, 6, 6, 6, 6];
+        setAudioBars([6, 6, 6, 6, 6]);
+
+        // 5 faixas de frequência musical para o equalizador
+        const bands = [
+          { start: 2, end: 8, max: 26 },    // Graves
+          { start: 9, end: 18, max: 38 },   // Médios-graves
+          { start: 19, end: 32, max: 48 },  // Voz principal (centro mais alto)
+          { start: 33, end: 50, max: 38 },  // Médios-altos
+          { start: 51, end: 75, max: 26 }   // Agudos
+        ];
+
         const checkLevel = () => {
           if (!isRecordingRef.current || !analyserRef.current) return;
           analyserRef.current.getByteFrequencyData(dataArray);
-          let maxVal = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            if (dataArray[i] > maxVal) maxVal = dataArray[i];
+
+          for (let i = 0; i < bands.length; i++) {
+            const { start, end, max } = bands[i];
+            let sum = 0;
+            for (let j = start; j < end; j++) {
+              sum += dataArray[j];
+            }
+            const avg = sum / (end - start);
+
+            // Altura alvo da barra com base na energia da frequência
+            const targetHeight = 6 + Math.min(max - 6, Math.round((avg / 130) * (max - 6)));
+
+            // Física musical suave (Attack e Decay suave):
+            // Sobe suavemente (Attack: 0.3) e desce devagarinho (Decay: 0.08)
+            const current = barsRef.current[i];
+            if (targetHeight > current) {
+              barsRef.current[i] = current + (targetHeight - current) * 0.30;
+            } else {
+              barsRef.current[i] = current + (targetHeight - current) * 0.08;
+            }
           }
-          // Normalização ultra sensível para fala: maxVal varia de 20 a 180
-          const level = Math.min(100, Math.max(0, Math.round((maxVal / 150) * 100)));
-          setLiveAudioLevel(level);
+
+          const now = performance.now();
+          if (now - lastRenderTimeRef.current > 33) {
+            lastRenderTimeRef.current = now;
+            setAudioBars([...barsRef.current]);
+          }
+
           animFrameRef.current = requestAnimationFrame(checkLevel);
         };
         checkLevel();
@@ -255,7 +329,7 @@ export default function App() {
         console.warn('Erro ao inicializar analisador de áudio:', err);
       }
 
-      // 3. Configurar MediaRecorder para gravar áudio em segundo plano
+      // 3. Configurar MediaRecorder
       let mimeType = 'audio/webm;codecs=opus';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = MediaRecorder.isTypeSupported('audio/webm') 
@@ -276,7 +350,7 @@ export default function App() {
 
       recorder.start(250);
 
-      // 4. Configurar Reconhecimento de Voz (SpeechRecognition)
+      // 4. Reconhecimento de Voz do Navegador
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         try {
@@ -332,9 +406,7 @@ export default function App() {
         }
       }
 
-      // 5. Motor Universal em Tempo Real:
-      // Para navegadores sem WebSpeech nativo (como Opera/Firefox/Brave),
-      // enviamos o áudio a cada 2s para atualizar o texto ao vivo enquanto fala!
+      // 5. Streaming contínuo a cada 2s para preenchimento em tempo real em qualquer navegador
       if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       liveIntervalRef.current = setInterval(async () => {
         if (!isRecordingRef.current) return;
@@ -352,7 +424,6 @@ export default function App() {
             }
           }
         } catch {
-          // ignora
         } finally {
           isStreamingBusyRef.current = false;
         }
@@ -366,7 +437,7 @@ export default function App() {
     }
   };
 
-  // PARAR GRAVAÇÃO E FORMATAR O TEXTO (COM DUPLO MOTOR: NAVEGADOR + SERVIDOR WHISPER/GOOGLE)
+  // PARAR GRAVAÇÃO E FORMATAR O TEXTO (COM DUPLO MOTOR E IA)
   const stopRecording = async () => {
     isRecordingRef.current = false;
     setIsRecording(false);
@@ -380,22 +451,22 @@ export default function App() {
     const duration = elapsedSeconds;
     setRecordedDuration(duration);
 
-    // 1. Limpar loop de análise de volume
+    // 1. Limpar loop de análise de áudio
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    setLiveAudioLevel(0);
+    setAudioBars([6, 6, 6, 6, 6]);
 
-    // 2. Parar reconhecimento de voz do navegador
+    // 2. Parar reconhecimento de voz
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch (e) {}
     }
 
-    // 3. Parar MediaRecorder e obter o Blob de áudio
+    // 3. Obter o áudio gravado
     let capturedBlob = null;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       await new Promise((resolve) => {
@@ -418,13 +489,13 @@ export default function App() {
       });
     }
 
-    // 4. Parar tracks do stream
+    // 4. Parar tracks
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
 
-    // 5. Coleta do texto capturado pelo navegador ou pelo streaming ao vivo
+    // 5. Coleta do texto capturado
     let spokenText = (
       accumulatedTranscriptRef.current + (interimTranscriptRef.current ? ' ' + interimTranscriptRef.current : '')
     ).trim();
@@ -433,18 +504,29 @@ export default function App() {
       spokenText = liveTranscription.trim();
     }
 
-    // 6. Transcrição completa e precisa do áudio no servidor
+    // 6. Transcrição completa no servidor
     if (capturedBlob) {
-      setDiagnosticNote('Processando texto final e pontuação no servidor...');
+      setDiagnosticNote('Processando texto final no servidor...');
       const serverText = await transcribeAudioViaServer(capturedBlob);
       if (serverText) {
         spokenText = serverText;
       }
     }
 
-    // 7. APLICA AQUELA ARRUMADA BACANA NO TEXTO (PONTUAÇÃO, MAIÚSCULAS, FORMATAÇÃO)
+    // 7. APLICA FORMATAÇÃO INTELIGENTE (LOCAL + IA)
     if (spokenText) {
-      const polishedText = formatAndPolishSpeech(spokenText);
+      // Pontuação inteligente local (sempre imediata)
+      let polishedText = formatAndPolishSpeech(spokenText);
+
+      // Se a IA estiver ativa e tiver chave configurada, aprimora com IA
+      const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
+      if (aiEnabled && key) {
+        setDiagnosticNote('Arrumando texto e pontuação com IA ✨...');
+        const aiResult = await requestAiPolish(spokenText);
+        if (aiResult) {
+          polishedText = aiResult;
+        }
+      }
 
       setFinalText((prev) => {
         if (!prev || !appendMode) return polishedText;
@@ -486,9 +568,10 @@ export default function App() {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
     }
+    setAudioBars([6, 6, 6, 6, 6]);
   };
 
-  // Re-transcrever áudio manualmente se desejar
+  // Re-transcrever áudio manualmente
   const handleRetranscribe = async () => {
     if (!audioBlob) return;
     setIsProcessing(true);
@@ -496,7 +579,13 @@ export default function App() {
     try {
       const result = await transcribeAudioViaServer(audioBlob);
       if (result) {
-        const polished = formatAndPolishSpeech(result);
+        let polished = formatAndPolishSpeech(result);
+        const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
+        if (aiEnabled && key) {
+          setDiagnosticNote('Arrumando texto com IA ✨...');
+          const aiRes = await requestAiPolish(result);
+          if (aiRes) polished = aiRes;
+        }
         setFinalText(polished);
         showToast('Áudio transcrito com sucesso! ✨');
       } else {
@@ -504,6 +593,36 @@ export default function App() {
       }
     } finally {
       setIsProcessing(false);
+      setDiagnosticNote('');
+    }
+  };
+
+  // Arrumar com IA manualmente pelo botão no texto
+  const handleManualAiPolish = async () => {
+    if (!finalText.trim()) return;
+
+    const key = aiApiKey || localStorage.getItem('voz_ai_key') || '';
+    if (!key) {
+      setSettingsTab('ia');
+      setIsSettingsOpen(true);
+      showToast('Insira sua chave gratuita da IA nas configurações para começar ✨');
+      return;
+    }
+
+    setIsAiPolishing(true);
+    setDiagnosticNote('Arrumando texto e pontuação com IA ✨...');
+    try {
+      const aiResult = await requestAiPolish(finalText);
+      if (aiResult) {
+        setFinalText(aiResult);
+        showToast('Texto aprimorado com sucesso pela IA! ✨');
+      } else {
+        showToast('Não foi possível conectar à IA. Verifique sua chave nas configurações.');
+      }
+    } catch {
+      showToast('Erro ao processar com IA.');
+    } finally {
+      setIsAiPolishing(false);
       setDiagnosticNote('');
     }
   };
@@ -525,7 +644,7 @@ export default function App() {
       setCopied(true);
       showToast('Texto copiado com sucesso! 📋');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
+    } catch {
       showToast('Falha ao copiar.');
     }
   };
@@ -542,71 +661,59 @@ export default function App() {
 
     const u = new SpeechSynthesisUtterance(finalText);
     u.lang = language || 'pt-BR';
-    u.onstart = () => setIsSpeaking(true);
     u.onend = () => setIsSpeaking(false);
     u.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
     window.speechSynthesis.speak(u);
   };
 
-  // BAIXAR .TXT
+  // BAIXAR ARQUIVO .TXT
   const handleDownloadTxt = () => {
     if (!finalText.trim()) return;
     const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transcricao-voz-${new Date().toISOString().slice(0, 10)}.txt`;
-    document.body.appendChild(a);
+    a.download = `voz-transcricao-${Date.now()}.txt`;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('Arquivo baixado!');
+    showToast('Download do arquivo de texto iniciado! 💾');
   };
 
-  // REFORMATAR TEXTO (ARRUMAR NOVAMENTE)
-  const handlePolishAgain = () => {
-    if (!finalText.trim()) return;
-    const polished = formatAndPolishSpeech(finalText);
-    setFinalText(polished);
-    showToast('Texto reformatado com sucesso!');
-  };
-
-  // LIMPAR
+  // RESETAR TELA
   const handleReset = () => {
     setFinalText('');
     setLiveTranscription('');
     setAudioUrl(null);
     setAudioBlob(null);
     setRecordedDuration(0);
-    setCopied(false);
-    setIsProcessing(false);
     setDiagnosticNote('');
-    if (isSpeaking && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
-    }
   };
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] text-slate-800 flex flex-col justify-between font-sans">
-      {/* Toast flutuante */}
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans selection:bg-slate-200">
+      {/* TOAST FLUTUANTE */}
       {toastMessage && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-medium shadow-md transition-all">
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-xs px-4 py-2 rounded-full shadow-lg transition-all">
           {toastMessage}
         </div>
       )}
 
       {/* CABEÇALHO */}
-      <header className="w-full max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
-        <div className="text-base font-semibold tracking-tight text-slate-900">
-          Voz
+      <header className="w-full max-w-3xl mx-auto px-6 py-5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-lg text-slate-900 tracking-tight">Voz</span>
+          <span className="text-[11px] text-slate-400 font-normal">gravador & transcrição</span>
         </div>
 
         <button
           type="button"
-          onClick={() => setIsSettingsOpen(true)}
-          disabled={isRecording}
-          className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-md hover:bg-slate-200/60 transition-colors"
+          onClick={() => {
+            setSettingsTab('audio');
+            setIsSettingsOpen(true);
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition-colors"
+          title="Abrir configurações de microfone e IA"
         >
           <Settings className="w-3.5 h-3.5" />
           <span>Configurações</span>
@@ -622,7 +729,7 @@ export default function App() {
               Toque no microfone para falar
             </h1>
             <p className="text-xs text-slate-500 mb-8 max-w-sm">
-              Conforme você fala, o tubinho aumenta e o texto aparece na tela. Ao parar, ele é arrumado para copiar.
+              Fale naturalmente. O equalizador acompanha o som e o texto é pontuado e organizado ao parar.
             </p>
 
             {/* BOTÃO DO MICROFONE */}
@@ -635,17 +742,17 @@ export default function App() {
               <Mic className="w-8 h-8" />
             </button>
 
-            {/* TUBINHO INDICADOR HORIZONTAL DE REPOUSO */}
-            <div className="w-64 sm:w-80 mt-6 flex flex-col items-center gap-1">
-              <div className="w-full h-3 bg-slate-200/70 rounded-full overflow-hidden border border-slate-300/80">
-                <div className="h-full bg-slate-300 w-1 rounded-full" />
-              </div>
-              <span className="text-[10px] text-slate-400">Microfone pronto para falar</span>
+            {/* EQUALIZADOR SUAVE EM REPOUSO */}
+            <div className="mt-6 flex items-center justify-center gap-1.5 h-10 px-4 py-1.5 rounded-xl bg-slate-100/70 border border-slate-200/60">
+              {[6, 6, 6, 6, 6].map((h, i) => (
+                <div key={i} className="w-2 h-1.5 rounded-full bg-slate-300" />
+              ))}
             </div>
+            <span className="text-[10px] text-slate-400 mt-1.5">Microfone pronto para falar</span>
           </div>
         )}
 
-        {/* ESTADO 2: GRAVANDO (COM O TUBINHO HORIZONTAL QUE AUMENTA QUANDO FALA) */}
+        {/* ESTADO 2: GRAVANDO (COM EQUALIZADOR MUSICAL SUAVE DE 5 BARRAS) */}
         {isRecording && (
           <div className="w-full flex flex-col items-center text-center">
             <div className="flex items-center gap-2 mb-3">
@@ -669,25 +776,24 @@ export default function App() {
               <span className="text-[10px] font-semibold uppercase">Parar</span>
             </button>
 
-            {/* TUBINHO HORIZONTAL DE PERCEPÇÃO DO SOM POR COR */}
-            <div className="w-64 sm:w-80 my-4 flex items-center justify-center">
-              <div className="w-full h-3.5 bg-slate-100 rounded-full p-0.5 border border-slate-200/90 shadow-inner overflow-hidden flex items-center">
+            {/* EQUALIZADOR MUSICAL SUAVE DE 5 BARRAS (SOBE E DESCE DEVAGARINHO COM FÍSICA NATURAL) */}
+            <div className="my-5 flex items-center justify-center gap-2 h-16 px-6 py-2 rounded-2xl bg-slate-100/80 border border-slate-200/90 shadow-inner">
+              {audioBars.map((height, idx) => (
                 <div
-                  className={`h-full rounded-full transition-all duration-75 ease-out ${
-                    liveAudioLevel > 45
-                      ? 'bg-gradient-to-r from-emerald-400 via-sky-400 to-indigo-500 shadow-xs'
-                      : liveAudioLevel > 10
-                      ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
-                      : 'bg-slate-300/50'
+                  key={idx}
+                  className={`w-2.5 rounded-full transition-all duration-75 ease-out ${
+                    height > 10
+                      ? 'bg-gradient-to-t from-emerald-500 via-teal-400 to-sky-500 shadow-xs'
+                      : 'bg-slate-300'
                   }`}
                   style={{
-                    width: `${Math.max(liveAudioLevel > 0 ? 4 : 0, liveAudioLevel)}%`
+                    height: `${Math.round(height)}px`,
                   }}
                 />
-              </div>
+              ))}
             </div>
 
-            {/* AVISO DE DIAGNÓSTICO (CASO O NAVEGADOR BLOQUEIE A REDE) */}
+            {/* AVISO DE DIAGNÓSTICO */}
             {diagnosticNote && (
               <div className="mb-3 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs text-left max-w-md">
                 {diagnosticNote}
@@ -712,7 +818,7 @@ export default function App() {
               </p>
 
               <div className="text-right text-[11px] text-slate-400 mt-2">
-                Aperte <strong>Parar</strong> para finalizar e arrumar o texto.
+                Aperte <strong>Parar</strong> para finalizar e aplicar a pontuação automática.
               </div>
             </div>
           </div>
@@ -720,8 +826,8 @@ export default function App() {
 
         {/* ESTADO 3: PROCESSANDO FINALIZAÇÃO */}
         {isProcessing && (
-          <div className="py-12 flex flex-col items-center gap-2.5 text-slate-600 animate-in fade-in">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-800" />
+          <div className="w-full flex flex-col items-center justify-center py-12 gap-3">
+            <Loader2 className="w-8 h-8 text-slate-700 animate-spin" />
             <span className="text-xs font-semibold text-slate-700">
               {diagnosticNote || 'Finalizando e arrumando a transcrição...'}
             </span>
@@ -769,32 +875,46 @@ export default function App() {
 
               {/* BARRA DE AÇÕES */}
               <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2 flex-wrap">
-                {/* BOTÃO COPIAR PRINCIPAL */}
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                    copied
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-900 hover:bg-slate-800 text-white'
-                  }`}
-                  title="Copiar texto para área de transferência"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? 'Copiado!' : 'Copiar texto'}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* BOTÃO COPIAR PRINCIPAL */}
+                  <button
+                    type="button"
+                    onClick={handleCopy}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                      copied
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-900 hover:bg-slate-800 text-white'
+                    }`}
+                    title="Copiar texto para área de transferência"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Copiado!' : 'Copiar texto'}</span>
+                  </button>
+
+                  {/* BOTÃO ARRUMAR COM IA */}
+                  <button
+                    type="button"
+                    onClick={handleManualAiPolish}
+                    disabled={isAiPolishing}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 rounded-lg text-xs font-medium transition-colors"
+                    title="Pontuar, organizar e corrigir com IA"
+                  >
+                    {isAiPolishing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-700" />
+                        <span>Arrumando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Arrumar com IA</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 {/* BOTÕES SECUNDÁRIOS */}
                 <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={handlePolishAgain}
-                    title="Dar aquela arrumada na pontuação novamente"
-                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                  </button>
-
                   <button
                     type="button"
                     onClick={handleSpeakText}
@@ -852,7 +972,7 @@ export default function App() {
       {/* RODAPÉ */}
       <footer className="w-full max-w-3xl mx-auto px-6 py-4 flex items-center justify-between text-[11px] text-slate-400">
         <span>Voz</span>
-        <span>Áudio processado diretamente no seu navegador</span>
+        <span>Áudio e IA integrados para transcrição precisa</span>
       </footer>
 
       {/* MODAL DE CONFIGURAÇÕES */}
@@ -870,6 +990,13 @@ export default function App() {
         history={history}
         onSelectHistoryItem={(h) => setFinalText(h)}
         onClearHistory={() => setHistory([])}
+        initialTab={settingsTab}
+        aiEnabled={aiEnabled}
+        setAiEnabled={setAiEnabled}
+        aiProvider={aiProvider}
+        setAiProvider={setAiProvider}
+        aiApiKey={aiApiKey}
+        setAiApiKey={setAiApiKey}
       />
     </div>
   );
